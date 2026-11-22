@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# 大体积可选模型权重（超过 GitHub 100 MB 单文件限制，可按需从 rembg releases 下载）
+app/weights/u2net.onnx
+app/weights/u2net_human_seg.onnx
+
+# 临时抓包缓存与运行时采集输出
+data/nope.bin
+data/probe.log
+data/ff.log
+data/captures/
+data/records*.csv

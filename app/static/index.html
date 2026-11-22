@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>创口温差初筛</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>创口温差初筛</h1>
+    <div class="toolbar">
+      <label class="source">来源
+        <select id="source"></select>
+      </label>
+      <button id="refresh" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.6"/><path d="M13.6 2.2v3.2H10.4"/></svg>
+        刷新
+      </button>
+      <button id="start" class="primary" type="button">开始</button>
+      <button id="stop" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7"/></svg>
+        停止
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage">
+      <div class="stage-row">
+        <div class="scale" id="scale">
+          <span>40</span>
+          <div class="scale-bar"></div>
+          <span>28</span>
+        </div>
+        <div class="viewport" id="viewport">
+          <img id="frame" alt="实时画面" src="/stream.mjpg">
+          <canvas id="overlay"></canvas>
+          <div id="probe" class="probe" hidden>—</div>
+        </div>
+      </div>
+      <div class="roi-tools">
+        <label class="source" id="weight-wrap">权重
+          <select id="weight">
+            <option value="u2netp">U2-Net 小</option>
+            <option value="u2net">U2-Net 标准</option>
+            <option value="human">人体分割</option>
+          </select>
+        </label>
+        <label class="source">画面
+          <select id="view">
+            <option value="original" selected>原图</option>
+            <option value="removed">去背景</option>
+            <option value="compare">前后对比</option>
+          </select>
+        </label>
+        <button id="auto" class="mode is-on" type="button">自动框热区</button>
+        <button id="mode-wound" class="mode" type="button">改创口框</button>
+        <button id="mode-ref" class="mode" type="button">改对照框</button>
+        <label class="distance" title="镜头到掌面工作距离（推荐 300 mm）">
+          <span>距离</span>
+          <input id="distance" type="number" min="250" max="400" step="10" value="300">
+          <span>mm</span>
+        </label>
+        <label class="distance" title="皮肤发射率">
+          <span>ε</span>
+          <input id="emissivity" type="number" min="0.50" max="1.00" step="0.01" value="0.98">
+        </label>
+        <button id="measure" type="button">稳定采 10 帧</button>
+        <button id="save" type="button">记下这一帧</button>
+      </div>
+      <p id="view-caption" class="saved" hidden>左：原画面　　右：去背景后。任意模式均可在画面直接拖拽调整框选区域</p>
+      <p id="saved" class="saved"></p>
+    </section>
+
+    <aside>
+      <div class="status-head">
+        <p id="grade" class="grade">等待画面</p>
+        <span id="stability" class="pill" hidden>—</span>
+      </div>
+      <p id="delta" class="delta" data-level="none">—</p>
+      <div id="regions" class="regions" hidden></div>
+      <dl id="lines"></dl>
+      <p id="message" class="message"></p>
+    </aside>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
