@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -104,7 +105,7 @@ class EngineTests(unittest.TestCase):
                 self.assertTrue(pt["ok"])
                 self.assertGreater(pt["temp"], 36.0)
 
-                saved = engine.save_record()
+                saved = engine.save_record(group="模拟明显温升", ntc_delta=3.1)
                 self.assertTrue(saved["ok"])
                 self.assertTrue((tmp_path / "records.csv").exists())
                 self.assertEqual(len(list((tmp_path / "captures").glob("*.npy"))), 1)
@@ -116,8 +117,78 @@ class EngineTests(unittest.TestCase):
                 self.assertNotEqual(rows[0]["wound_px"], "")
                 self.assertNotEqual(rows[0]["ref_px"], "")
 
+                # 再保存一次同组记录以验证重复性极差 (Spread <= 0.3°C) 与 NTC 误差统计
+                saved2 = engine.save_record(group="模拟明显温升", ntc_delta=3.3)
+                self.assertTrue(saved2["ok"])
+                rec_summary = engine.list_records()
+                self.assertTrue(rec_summary["ok"])
+                self.assertEqual(rec_summary["total"], 2)
+                g_stat = rec_summary["groups"]["模拟明显温升"]
+                self.assertEqual(g_stat["count"], 2)
+                self.assertTrue(g_stat["repeatability_ok"])
+                self.assertIsNotNone(g_stat["ntc_mae"])
+
+                # 验证历史 .npy 回载复盘与等温差线视图切换、手部姿态对齐
+                with patch.object(eng_mod, "ROOT", tmp_path), patch.object(eng_mod, "CAPTURE_DIR", tmp_path / "captures"):
+                    rep_res = engine.load_capture(
+                        saved["npy"],
+                        wound_px=rows[0]["wound_px"],
+                        ref_px=rows[0]["ref_px"],
+                    )
+                    self.assertTrue(rep_res["ok"])
+                    self.assertEqual(rep_res["state"]["source"], "replay")
+                    self.assertIsNotNone(rep_res["state"]["physics"])
+                    self.assertIsNotNone(rep_res["state"]["pose"])
+                    # 拒绝越权路径
+                    bad_rep = engine.load_capture("C:/Windows/win.ini")
+                    self.assertFalse(bad_rep["ok"])
+
+                engine.set_view("isotherm")
+                self.assertEqual(engine.state()["view"], "isotherm")
+                aligned = engine.align_rois_to_pose()
+                self.assertTrue(aligned["ok"])
+
                 engine.unlock_measure()
                 self.assertEqual(engine.state()["measure_state"], "idle")
+
+    def test_drift_instability_jump_reset_and_region_selection(self) -> None:
+        # 1. 慢速漂移使 10 帧极差 > 0.3 °C，必须标记 unstable 并拒绝保存
+        engine = Engine()
+        base = _healthy_hand()
+        for step in range(5):
+            f = base.copy()
+            f[f > 30.0] += step * 0.1  # 相邻跳变 0.1 <= 0.3，但极差 0.4 > 0.3
+            engine._publish(None, f, "drift")
+        st_drift = engine.state()
+        self.assertTrue(st_drift["unstable"])
+        self.assertGreater(st_drift["skin_spread"], 0.3)
+        self.assertFalse(engine.save_record()["ok"])
+
+        # 2. 突变 (> 0.3°C) 必须清空历史，避免前后混叠拖影
+        jumped = base.copy()
+        jumped[jumped > 30.0] += 0.8
+        engine._publish(None, jumped, "jump")
+        self.assertEqual(engine.state()["frame_count"], 1)
+
+        # 3. 健康手背自动无框时拒绝保存
+        engine_healthy = Engine()
+        engine_healthy._publish(None, _healthy_hand(), "healthy")
+        self.assertIsNone(engine_healthy.state()["wound_roi"])
+        self.assertFalse(engine_healthy.save_record()["ok"])
+
+        # 4. 多区域 select_region(1) 保留真实 wound_n 与 ref_n
+        yy, xx = np.mgrid[0:120, 0:160]
+        two = _healthy_hand()
+        two[(xx - 100) ** 2 + (yy - 58) ** 2 <= 36] = 36.6
+        two[(xx - 52) ** 2 + (yy - 52) ** 2 <= 36] = 35.0
+        engine_two = Engine()
+        engine_two._publish(None, two, "two")
+        self.assertEqual(engine_two.state()["region_count"], 2)
+        engine_two.select_region(1)
+        s1 = engine_two.state()
+        self.assertEqual(s1["selected_region"], 1)
+        self.assertGreater(s1["wound"]["n"], 0)
+        self.assertGreater(s1["ref"]["n"], 0)
 
 
 class ServerApiTests(unittest.TestCase):
@@ -186,8 +257,69 @@ class ServerApiTests(unittest.TestCase):
                 self.assertTrue(m_res["ok"])
                 _, u_res = req("/api/unlock", {})
                 self.assertTrue(u_res["ok"])
+                _, auto_res = req("/api/auto", {"enabled": True})
+                self.assertTrue(auto_res["state"]["auto"])
+
+                # 验证 synthetic:baseline (档 0) 与 synthetic:mild (档 1)
+                for src, expected_grade in (("synthetic:baseline", 0), ("synthetic:mild", 1)):
+                    _, sr = req("/api/start", {"source": src})
+                    self.assertTrue(sr["ok"])
+                    deadline = time.monotonic() + 3.0
+                    st_s = {}
+                    while time.monotonic() < deadline:
+                        _, raw = req("/api/state")
+                        st_s = json.loads(raw.decode("utf-8"))
+                        if st_s.get("has_temperature") and st_s.get("source") == src:
+                            break
+                        time.sleep(0.05)
+                    self.assertEqual(st_s.get("grade"), expected_grade, st_s)
+
+                # 验证畸形 JSON、非 dict JSON 与超界 ROI 返回 400
+                def post_raw(path: str, payload: bytes):
+                    r = urllib.request.Request(
+                        base + path,
+                        data=payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    try:
+                        with urllib.request.urlopen(r, timeout=5) as resp:
+                            return resp.status
+                    except urllib.error.HTTPError as err:
+                        return err.code
+
+                self.assertEqual(post_raw("/api/start", b"{bad json"), 400)
+                self.assertEqual(post_raw("/api/start", b"[1, 2, 3]"), 400)
+                self.assertEqual(post_raw("/api/roi", json.dumps({"wound": {"x": "bad"}}).encode("utf-8")), 400)
+
+                # 验证 /api/view isotherm、/api/align_pose、/api/records、/api/records.csv 与 /favicon.ico
+                _, v_res = req("/api/view", {"mode": "isotherm"})
+                self.assertEqual(v_res["state"]["view"], "isotherm")
+                _, ap_res = req("/api/align_pose", {})
+                self.assertTrue(ap_res["ok"])
+                _, rec_raw = req("/api/records")
+                rec_data = json.loads(rec_raw.decode("utf-8"))
+                self.assertTrue(rec_data["ok"])
+                st_csv, csv_raw = req("/api/records.csv")
+                self.assertEqual(st_csv, 200)
+                self.assertIn("wound_px", csv_raw.decode("utf-8-sig"))
+                st_ico, ico_raw = req("/favicon.ico")
+                self.assertEqual(st_ico, 200)
+                self.assertIn(b"<svg", ico_raw)
+
+                # 校验 app.js 中所有 #id 选择器在 index.html 中都真实存在，确保无失效按钮绑定
+                import re
+
+                html_text = html.decode("utf-8")
+                js_text = js.decode("utf-8")
+                html_ids = set(re.findall(r'id="([^"]+)"', html_text))
+                js_ids = set(re.findall(r'querySelector\("#([^"\s]+)"\)', js_text))
+                missing = js_ids - html_ids
+                self.assertEqual(missing, set(), f"Missing HTML IDs referenced by app.js: {missing}")
+
                 _, stop_res = req("/api/stop", {})
                 self.assertTrue(stop_res["ok"])
+                self.assertFalse(stop_res["state"]["running"])
             finally:
                 fresh.stop()
                 server.shutdown()

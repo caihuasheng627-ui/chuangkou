@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import app.engine as eng_mod
 from app.engine import Engine, list_cameras
 from app.foreground import available_models
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 ENGINE = Engine()
+MAX_BODY_BYTES = 1_048_576
+FAVICON_SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    b'<rect width="32" height="32" rx="7" fill="#13171e"/>'
+    b'<circle cx="16" cy="16" r="9" fill="none" stroke="#ffb020" stroke-width="2.2"/>'
+    b'<circle cx="16" cy="16" r="3.5" fill="#ff6347"/>'
+    b'<path d="M16 3v5M16 24v5M3 16h5M24 16h5" stroke="#6bc2ff" stroke-width="2" stroke-linecap="round"/>'
+    b"</svg>"
+)
+
+
+class _PayloadTooLarge(ValueError):
+    pass
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -32,10 +52,16 @@ class Handler(BaseHTTPRequestHandler):
             self._file(STATIC / "app.css", "text/css; charset=utf-8")
         elif path == "/static/app.js":
             self._file(STATIC / "app.js", "text/javascript; charset=utf-8")
+        elif path == "/favicon.ico":
+            self._bytes(FAVICON_SVG, "image/svg+xml", cache="public, max-age=3600")
         elif path == "/api/devices":
             self._json({"devices": list_cameras(), "models": available_models()})
         elif path == "/api/state":
             self._json(ENGINE.state())
+        elif path == "/api/records":
+            self._json(ENGINE.list_records())
+        elif path == "/api/records.csv":
+            self._csv_export()
         elif path == "/api/point":
             qs = parse_qs(parsed.query)
             try:
@@ -54,8 +80,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._body()
-        except json.JSONDecodeError:
-            self._json({"ok": False, "error": "请求不是 JSON"}, 400)
+        except _PayloadTooLarge as exc:
+            self._json({"ok": False, "error": str(exc)}, 413)
+            return
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            self._json({"ok": False, "error": str(exc) if isinstance(exc, ValueError) else "请求不是有效 JSON"}, 400)
             return
         if path == "/api/start":
             source = str(body.get("source", ""))
@@ -63,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "state": ENGINE.state()})
         elif path == "/api/stop":
             ENGINE.stop()
-            self._json({"ok": True})
+            self._json({"ok": True, "state": ENGINE.state()})
         elif path == "/api/roi":
             try:
                 ENGINE.set_rois(body.get("wound"), body.get("ref"), manual=bool(body.get("manual")))
@@ -107,23 +136,68 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json({"ok": True, "state": ENGINE.state()})
         elif path == "/api/save":
-            self._json(ENGINE.save_record())
+            self._json(
+                ENGINE.save_record(
+                    group=str(body.get("group", "日常初筛")),
+                    ntc_delta=body.get("ntc_delta"),
+                )
+            )
+        elif path == "/api/replay":
+            self._json(
+                ENGINE.load_capture(
+                    str(body.get("npy_path", "")),
+                    wound_px=str(body.get("wound_px", "")),
+                    ref_px=str(body.get("ref_px", "")),
+                )
+            )
+        elif path == "/api/align_pose":
+            self._json(ENGINE.align_rois_to_pose())
         else:
             self.send_error(404)
 
     def _body(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0"))
+        raw_len = self.headers.get("Content-Length", "0").strip()
+        try:
+            length = int(raw_len)
+        except ValueError as exc:
+            raise ValueError("Content-Length 无效") from exc
+        if length < 0:
+            raise ValueError("Content-Length 不能为负")
+        if length > MAX_BODY_BYTES:
+            raise _PayloadTooLarge("请求体超过 1 MB 限制")
         raw = self.rfile.read(length) if length else b"{}"
-        return json.loads(raw.decode("utf-8"))
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("请求体必须是 JSON 对象")
+        return data
 
-    def _file(self, path: Path, content_type: str) -> None:
-        data = path.read_bytes()
+    def _bytes(self, data: bytes, content_type: str, cache: str = "no-cache", extra_headers: dict | None = None) -> None:
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", cache)
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
+
+    def _csv_export(self) -> None:
+        v2 = eng_mod.RECORD_PATH.with_name("records_v2.csv")
+        target = v2 if v2.exists() else eng_mod.RECORD_PATH
+        if target.exists():
+            data = target.read_bytes()
+        else:
+            data = ("\ufeff" + ",".join(eng_mod.RECORD_HEADERS) + "\r\n").encode("utf-8")
+        self._bytes(
+            data,
+            "text/csv; charset=utf-8",
+            cache="no-store",
+            extra_headers={"Content-Disposition": 'attachment; filename="chuangkou_records.csv"'},
+        )
+
+    def _file(self, path: Path, content_type: str) -> None:
+        self._bytes(path.read_bytes(), content_type, cache="no-cache")
 
     def _json(self, payload: dict, status: int = 200) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -165,8 +239,9 @@ def main() -> None:
     thermal = next((item["id"] for item in devices if "UVC" in item["label"].upper()), None)
     if thermal:
         ENGINE.start(thermal)
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), Handler)
-    print("创口温差初筛  http://127.0.0.1:8765", flush=True)
+    port = int(os.environ.get("CHUANGKOU_PORT", "8765"))
+    server = _Server(("127.0.0.1", port), Handler)
+    print(f"创口温差初筛  http://127.0.0.1:{port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
