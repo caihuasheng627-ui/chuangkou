@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "title": "Wound thermal workstation",
+    "description": "Wound-temperature screening workspace: local rule grading, evidence search, pseudonymous archive, report drafts, camera probe, and a side chat constrained by physician-role rules."
+  },
+  "open": "Wound Clinic",
+  "subtitle": "Thermal screening workspace",
+  "close": "Close"
+}

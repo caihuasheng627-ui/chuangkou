@@ -1,0 +1,44 @@
+{
+  "name": "dsh-wound-clinic",
+  "version": "0.7.2",
+  "private": true,
+  "type": "module",
+  "description": "Native DSH wound thermal screening workstation with the integrated chuangkou UVC/U2-Net engine, thermal analysis, local drafts, patient archives, reports, and physician-role evidence chat.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "runtime/**/*",
+    "examples/**/*",
+    "docs/**/*",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

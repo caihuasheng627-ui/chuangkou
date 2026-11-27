@@ -1,0 +1,54 @@
+[
+  {
+    "evidence_id": "E001",
+    "title": "What is the normal wound bed temperature? A scoping review and new hypothesis",
+    "year": 2021,
+    "type": "scoping_review",
+    "population": "慢性伤口；具体测量条件需按原研究判断",
+    "scenario": ["absolute_temperature", "wound_bed"],
+    "verified_excerpt": "慢性非感染伤口床 30.2–33.0°C 为综述提出的参考范围/假说，不应当作通用诊断界值。",
+    "threshold": {"metric": "wound_bed_temperature", "range_c": [30.2, 33.0]},
+    "source_url": "https://aka.doubaocdn.com/l/Ta0ZUXXgVH",
+    "review_status": "project_verified",
+    "reviewed_at": "2026-11-22"
+  },
+  {
+    "evidence_id": "E002",
+    "title": "Is my wound infected? A study of thermal asymmetry and bacterial fluorescence",
+    "year": 2023,
+    "type": "diagnostic_cohort",
+    "population": "该研究纳入的慢性创口人群，不能直接外推至所有急性伤口",
+    "scenario": ["thermal_asymmetry", "infection_screening"],
+    "verified_excerpt": "研究采用创周热不对称 ≥2.55°C 区分感染与非感染伤口，报告敏感度 100%、特异度 64%；温度不能替代病原学。",
+    "threshold": {"metric": "periwound_thermal_asymmetry", "operator": ">=", "value_c": 2.55},
+    "source_url": "https://www.frontiersin.org/journals/medicine/articles/10.3389/fmed.2023.1165281/pdf",
+    "review_status": "project_verified",
+    "reviewed_at": "2026-11-22"
+  },
+  {
+    "evidence_id": "E003",
+    "title": "Preventing Diabetic Foot Ulcer Recurrence in High-Risk Patients",
+    "year": 2007,
+    "type": "randomized_controlled_trial",
+    "population": "糖尿病足溃疡复发高风险人群；居家双侧对应位点测温",
+    "scenario": ["diabetic_foot", "repeat_monitoring"],
+    "verified_excerpt": "双侧对应位点温差 >2.2°C 用于触发预警并调整活动；该阈值不是所有创口类型的通用感染诊断阈值。",
+    "threshold": {"metric": "contralateral_site_delta", "operator": ">", "value_c": 2.2},
+    "source_url": "http://secureservercdn.net/184.168.47.225/38d.2c6.myftpupload.com/wp-content/uploads/2015/07/Preventing-Diabetic-Foot-Ulcer-Diabetes-Care-2007.pdf",
+    "review_status": "project_verified",
+    "reviewed_at": "2026-11-22"
+  },
+  {
+    "evidence_id": "E004",
+    "title": "Single versus repeated temperature assessment and screening limitations",
+    "year": 2024,
+    "type": "clinical_evidence_summary",
+    "population": "温度监测相关研究人群，具体口径见原文",
+    "scenario": ["repeat_measurement", "false_positive"],
+    "verified_excerpt": "单次温度筛查存在假阳性，重复测量和趋势确认优于单次读数；本项目用其支持复测建议而非确诊。",
+    "threshold": null,
+    "source_url": "https://www.ovid.com/journals/jlex/abstract/10.1177/15347346211062719",
+    "review_status": "project_verified",
+    "reviewed_at": "2026-11-22"
+  }
+]

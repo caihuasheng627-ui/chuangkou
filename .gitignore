@@ -15,5 +15,9 @@ data/captures/
 data/records*.csv
 data/records_meta.json
 data/wound_archive.db
+data/assistant_config.json
 data/reports/
 data/probe_output/
+dsh-plugin/data/wound_archive.db
+dsh-plugin/data/probe_output/
+dsh-plugin/reports/*.html

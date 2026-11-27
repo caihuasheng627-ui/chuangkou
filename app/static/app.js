@@ -1,5 +1,20 @@
 const DEFAULT_WOUND = { x: 0.585, y: 0.433, w: 0.08, h: 0.1 };
 const DEFAULT_REF = { x: 0.28, y: 0.36, w: 0.14, h: 0.2 };
+const DETAIL_LABELS = {
+  site: "创口部位",
+  duration: "病程 / 持续时间",
+  symptoms: "创面表现",
+  treatment: "处理与用药史",
+  notes: "其他备注",
+};
+const REASON_LABEL = {
+  offline_rule_mode: "离线规则模式",
+  rule_violation: "安全校验已拦截",
+  AUTH: "API 鉴权失败",
+  ACCOUNT_QUOTA: "模型余额不足",
+  RATE_LIMIT: "接口限流",
+  llm_unavailable: "模型服务不可用",
+};
 
 const rois = {
   wound: { ...DEFAULT_WOUND },
@@ -24,22 +39,53 @@ let activeReplayPath = "";
 let pinnedSpot = null;
 let toastTimer = null;
 
-// DOM refs
+// 5 栏工作站与临床/循证对话状态
+let activePage = "screen";
+let importedMeasurement = null;
+let importedAnalysis = null;
+let clinicData = null;
+let activeDraft = null;
+let activePatientRef = "";
+let focusEvidenceId = "";
+let assistantRules = null;
+let assistantConfig = null;
+let assistantMessages = [];
+let assistantBusy = false;
+let pendingDetails = null;
+
+/* ===== DOM 引用（与 index.html 严格一一对应） ===== */
 const connBadgeEl = document.querySelector("#conn-badge");
 const sourceEl = document.querySelector("#source");
 const distanceEl = document.querySelector("#distance");
 const emissivityEl = document.querySelector("#emissivity");
 const distBtns = [...document.querySelectorAll(".dist-btn")];
+const navBtns = [...document.querySelectorAll(".nav-item")];
 const viewBtns = [...document.querySelectorAll("#view-tabs .seg-btn")];
-const tabBtns = [...document.querySelectorAll(".side-tabs .tab-btn")];
-const tabPanels = {
-  live: document.querySelector("#tab-live"),
-  trend: document.querySelector("#tab-trend"),
-  lab: document.querySelector("#tab-lab"),
-  clinic: document.querySelector("#tab-clinic"),
+const pages = {
+  screen: document.querySelector("#page-screen"),
+  reports: document.querySelector("#page-reports"),
+  archive: document.querySelector("#page-archive"),
+  trend: document.querySelector("#page-trend"),
+  evidence: document.querySelector("#page-evidence"),
 };
+
+const navDraftsBadgeEl = document.querySelector("#nav-drafts-badge");
+const navPatientsBadgeEl = document.querySelector("#nav-patients-badge");
 const tabCountEl = document.querySelector("#tab-count");
-const clinicCountEl = document.querySelector("#clinic-count");
+
+const topbarSaveDraftBtn = document.querySelector("#topbar-save-draft");
+const themeToggleBtn = document.querySelector("#theme-toggle");
+const themeLabelEl = document.querySelector("#theme-label");
+const assistantToggleBtn = document.querySelector("#assistant-toggle");
+
+const importedBannerEl = document.querySelector("#imported-banner");
+const importedBannerTitleEl = document.querySelector("#imported-banner-title");
+const importedBannerSubEl = document.querySelector("#imported-banner-sub");
+const importedSaveDraftBtn = document.querySelector("#imported-save-draft");
+const importedClearBtn = document.querySelector("#imported-clear");
+const loadExampleBtn = document.querySelector("#load-example-btn");
+const importJsonBtn = document.querySelector("#import-json-btn");
+const importJsonFileEl = document.querySelector("#import-json-file");
 
 const frame = document.querySelector("#frame");
 const canvas = document.querySelector("#overlay");
@@ -87,6 +133,9 @@ const cardWoundValEl = document.querySelector("#card-wound-val");
 const cardWoundSubEl = document.querySelector("#card-wound-sub");
 const cardRefValEl = document.querySelector("#card-ref-val");
 const cardRefSubEl = document.querySelector("#card-ref-sub");
+const kpiExtraValEl = document.querySelector("#kpi-extra-val");
+const kpiExtraSubEl = document.querySelector("#kpi-extra-sub");
+const clinicalRuleBadgeEl = document.querySelector("#clinical-rule-badge");
 const regionsEl = document.querySelector("#regions");
 const messageEl = document.querySelector("#message");
 
@@ -103,18 +152,21 @@ const probeBtn = document.querySelector("#probe-btn");
 const probeOutputEl = document.querySelector("#probe-output");
 const linesEl = document.querySelector("#lines");
 
-const trendSummaryEl = document.querySelector("#trend-summary");
-const trendChartEl = document.querySelector("#trend-chart");
-const historyCountEl = document.querySelector("#history-count");
-const historyListEl = document.querySelector("#history-list");
-const groupStatsEl = document.querySelector("#group-stats");
-
-const draftTitleEl = document.querySelector("#draft-title");
-const saveDraftBtn = document.querySelector("#save-draft");
+// 报告中心 DOM
+const reportsListViewEl = document.querySelector("#reports-list-view");
+const reportsDetailViewEl = document.querySelector("#reports-detail-view");
+const reportsNewDraftBtn = document.querySelector("#reports-new-draft");
 const clinicDraftsEl = document.querySelector("#clinic-drafts");
-const draftEditorEl = document.querySelector("#draft-editor");
-const draftEditorTitleEl = document.querySelector("#draft-editor-title");
+const draftEditTitleEl = document.querySelector("#draft-edit-title");
 const draftGatePillEl = document.querySelector("#draft-gate-pill");
+const draftBackBtn = document.querySelector("#draft-back-btn");
+const draftKpiTwEl = document.querySelector("#draft-kpi-tw");
+const draftKpiTrEl = document.querySelector("#draft-kpi-tr");
+const draftKpiDtEl = document.querySelector("#draft-kpi-dt");
+const draftKpiAreaEl = document.querySelector("#draft-kpi-area");
+const draftRuleCardEl = document.querySelector("#draft-rule-card");
+const draftRuleTitleEl = document.querySelector("#draft-rule-title");
+const draftRuleBadgeEl = document.querySelector("#draft-rule-badge");
 const draftGateNoteEl = document.querySelector("#draft-gate-note");
 const draftSiteEl = document.querySelector("#draft-site");
 const draftDurationEl = document.querySelector("#draft-duration");
@@ -122,15 +174,65 @@ const draftSymptomsEl = document.querySelector("#draft-symptoms");
 const draftTreatmentEl = document.querySelector("#draft-treatment");
 const draftNotesEl = document.querySelector("#draft-notes");
 const draftSaveDetailsBtn = document.querySelector("#draft-save-details");
+const draftOpenChatBtn = document.querySelector("#draft-open-chat");
+const draftSupplementsListEl = document.querySelector("#draft-supplements-list");
+const draftArchiveHintEl = document.querySelector("#draft-archive-hint");
 const draftArchiveBtn = document.querySelector("#draft-archive");
+
+// 患者档案 & 趋势 & 知识库 DOM
 const clinicPatientCountEl = document.querySelector("#clinic-patient-count");
 const clinicPatientsEl = document.querySelector("#clinic-patients");
+const patientHistoryTitleEl = document.querySelector("#patient-history-title");
+const patientHistoryWrapEl = document.querySelector("#patient-history-wrap");
 const clinicReportsEl = document.querySelector("#clinic-reports");
 const clinicEvidenceEl = document.querySelector("#clinic-evidence");
 
-let activeDraftId = "";
-let clinicData = null;
+const trendSummaryEl = document.querySelector("#trend-summary");
+const trendChartEl = document.querySelector("#trend-chart");
+const historyCountEl = document.querySelector("#history-count");
+const historyListEl = document.querySelector("#history-list");
+const groupStatsEl = document.querySelector("#group-stats");
 
+// 循证对话抽屉 DOM
+const assistantDrawerEl = document.querySelector("#assistant-drawer");
+const assistantModeSubEl = document.querySelector("#assistant-mode-sub");
+const assistantRulesBtn = document.querySelector("#assistant-rules-btn");
+const assistantCfgBtn = document.querySelector("#assistant-cfg-btn");
+const assistantCloseBtn = document.querySelector("#assistant-close-btn");
+const assistantCtxDraftEl = document.querySelector("#assistant-ctx-draft");
+const assistantCtxRuleEl = document.querySelector("#assistant-ctx-rule");
+const assistantCtxDeltaEl = document.querySelector("#assistant-ctx-delta");
+const assistantChatViewEl = document.querySelector("#assistant-chat-view");
+const assistantRulesViewEl = document.querySelector("#assistant-rules-view");
+const assistantCfgViewEl = document.querySelector("#assistant-cfg-view");
+const assistantRulesBackBtn = document.querySelector("#assistant-rules-back");
+const assistantCfgBackBtn = document.querySelector("#assistant-cfg-back");
+const assistantRulesBodyEl = document.querySelector("#assistant-rules-body");
+const assistantMessagesEl = document.querySelector("#assistant-messages");
+const assistantPendingCardEl = document.querySelector("#assistant-pending-card");
+const assistantPendingFieldsEl = document.querySelector("#assistant-pending-fields");
+const assistantApplyPendingBtn = document.querySelector("#assistant-apply-pending");
+const assistantDismissPendingBtn = document.querySelector("#assistant-dismiss-pending");
+const assistantQuickEl = document.querySelector("#assistant-quick");
+const assistantInputEl = document.querySelector("#assistant-input");
+const assistantSendBtn = document.querySelector("#assistant-send-btn");
+
+const llmBaseUrlEl = document.querySelector("#llm-base-url");
+const llmModelEl = document.querySelector("#llm-model");
+const llmApiKeyEl = document.querySelector("#llm-api-key");
+const llmKeyStatusEl = document.querySelector("#llm-key-status");
+const llmEnabledEl = document.querySelector("#llm-enabled");
+const llmSaveBtn = document.querySelector("#llm-save-btn");
+const llmClearKeyBtn = document.querySelector("#llm-clear-key-btn");
+
+// 保存草稿弹窗 DOM
+const draftModalEl = document.querySelector("#draft-modal");
+const draftModalMetaEl = document.querySelector("#draft-modal-meta");
+const draftModalTitleEl = document.querySelector("#draft-modal-title");
+const draftModalCancelBtn = document.querySelector("#draft-modal-cancel");
+const draftModalConfirmBtn = document.querySelector("#draft-modal-confirm");
+
+/* ===== 工具函数 ===== */
 function showToast(text, isError = false) {
   if (!toastEl) return;
   toastEl.textContent = text;
@@ -159,6 +261,39 @@ async function sendAction(url, body) {
   return res;
 }
 
+function fmtDelta(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}°C`;
+}
+
+function fmtTime(s) {
+  return String(s || "").replace("T", " ").slice(0, 16) || "—";
+}
+
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  if (themeLabelEl) {
+    themeLabelEl.textContent = next === "dark" ? "亮色" : "暗色";
+  }
+  try {
+    localStorage.setItem("chuangkou_theme", next);
+  } catch (_err) {
+    // 忽略隐私模式
+  }
+}
+
+function initTheme() {
+  let saved = "light";
+  try {
+    saved = localStorage.getItem("chuangkou_theme") || "light";
+  } catch (_err) {
+    saved = "light";
+  }
+  applyTheme(saved);
+}
+
 function syncDistPresets(mm) {
   const val = Math.round(Number(mm) || 300);
   for (const btn of distBtns) {
@@ -172,20 +307,34 @@ function syncViewTabs(mode) {
   }
 }
 
-function setActiveTab(name) {
-  for (const btn of tabBtns) {
-    btn.classList.toggle("is-on", btn.dataset.tab === name);
+function setActivePage(name) {
+  if (!pages[name]) return;
+  activePage = name;
+  for (const btn of navBtns) {
+    btn.classList.toggle("is-on", btn.dataset.page === name);
   }
-  for (const [key, panel] of Object.entries(tabPanels)) {
+  for (const [key, panel] of Object.entries(pages)) {
     panel.classList.toggle("is-on", key === name);
   }
-  if (name === "trend" || name === "lab") {
-    loadRecords();
-  } else if (name === "clinic") {
-    loadClinic();
+  if (name === "reports" || name === "archive" || name === "evidence") {
+    loadClinic(false);
   }
+  if (name === "trend") {
+    loadRecords(false);
+  }
+  if (name === "screen") {
+    setTimeout(paint, 30);
+  }
+  updateAssistantContext();
 }
 
+function jumpToEvidence(evId) {
+  focusEvidenceId = evId || "";
+  setActivePage("evidence");
+  renderEvidenceList((clinicData && clinicData.evidence) || []);
+}
+
+/* ===== 设备枚举 ===== */
 async function loadDevices(notify = false) {
   const previous = sourceEl.value;
   try {
@@ -227,7 +376,7 @@ async function loadDevices(notify = false) {
   }
 }
 
-/* ===== 画布坐标与智能命中检测（平移 + 四角缩放 + 新建） ===== */
+/* ===== 画布坐标、ROI 拖拽缩放与点温查询 ===== */
 function contentBox() {
   const view = viewport.getBoundingClientRect();
   const image = frame.getBoundingClientRect();
@@ -253,18 +402,14 @@ function panelBox(side = "right") {
   const imgW = frame.naturalWidth || 1290;
   const gap = 10 / imgW;
   const span = (1 - gap) / 2;
-  if (side === "left") {
-    return { x: box.x, y: box.y, w: box.w * span, h: box.h };
-  }
+  if (side === "left") return { x: box.x, y: box.y, w: box.w * span, h: box.h };
   return { x: box.x + box.w * (span + gap), y: box.y, w: box.w * span, h: box.h };
 }
 
 function pointerRatio(event) {
   const full = contentBox();
   const view = viewport.getBoundingClientRect();
-  if (full.w <= 1 || full.h <= 1) {
-    return { x: 0, y: 0, inside: false, panel: full };
-  }
+  if (full.w <= 1 || full.h <= 1) return { x: 0, y: 0, inside: false, panel: full };
   const px = event.clientX - view.left;
   const py = event.clientY - view.top;
   const rawX = (px - full.x) / full.w;
@@ -297,287 +442,240 @@ function pointerRatio(event) {
   };
 }
 
-function hitTestRoi(point) {
-  if (!point.inside || point.panel.w < 10) return null;
-  const tolX = 11 / point.panel.w;
-  const tolY = 11 / point.panel.h;
-  // 优先检测四角缩放手柄（先查当前选中的模式，再查另一个）
-  const order = drawMode === "wound" ? ["wound", "ref"] : ["ref", "wound"];
-  for (const target of order) {
-    const r = rois[target];
-    if (!r) continue;
+function roiRectPx(roi, panel) {
+  return {
+    x: panel.x + roi.x * panel.w,
+    y: panel.y + roi.y * panel.h,
+    w: roi.w * panel.w,
+    h: roi.h * panel.h,
+  };
+}
+
+function hitTestRois(px, py, panel) {
+  if (!panel || panel.w < 10) return null;
+  const handleR = 11;
+  for (const key of ["wound", "ref"]) {
+    const roi = rois[key];
+    if (!roi) continue;
+    const r = roiRectPx(roi, panel);
     const corners = [
-      { name: "nw", x: r.x, y: r.y, cursor: "nwse-resize" },
-      { name: "ne", x: r.x + r.w, y: r.y, cursor: "nesw-resize" },
-      { name: "sw", x: r.x, y: r.y + r.h, cursor: "nesw-resize" },
-      { name: "se", x: r.x + r.w, y: r.y + r.h, cursor: "nwse-resize" },
+      ["nw", r.x, r.y],
+      ["ne", r.x + r.w, r.y],
+      ["sw", r.x, r.y + r.h],
+      ["se", r.x + r.w, r.y + r.h],
     ];
-    for (const c of corners) {
-      if (Math.abs(point.x - c.x) <= tolX && Math.abs(point.y - c.y) <= tolY) {
-        return { kind: "resize", target, corner: c.name, cursor: c.cursor };
+    for (const [corner, cx, cy] of corners) {
+      if (Math.hypot(px - cx, py - cy) <= handleR) {
+        return { kind: "resize", target: key, corner };
       }
     }
-  }
-  for (const target of order) {
-    const r = rois[target];
-    if (!r) continue;
-    if (point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h) {
-      return { kind: "move", target, cursor: "grab" };
+    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) {
+      return { kind: "move", target: key };
     }
   }
   return null;
 }
 
-function roiDimLabel(roi, box) {
-  if (!roi || !lastState?.pixel_mm || !box || box.w < 260) return "";
-  const wMm = roi.w * 160 * lastState.pixel_mm;
-  const hMm = roi.h * 120 * lastState.pixel_mm;
-  return ` · ${Math.round(wMm)}×${Math.round(hMm)}mm`;
+function cursorForHit(hit) {
+  if (!hit) return "crosshair";
+  if (hit.kind === "move") return "grab";
+  if (hit.corner === "nw" || hit.corner === "se") return "nwse-resize";
+  return "nesw-resize";
 }
 
-function paint() {
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  const cw = Math.max(1, viewport.clientWidth);
-  const ch = Math.max(1, viewport.clientHeight);
-  const targetW = Math.round(cw * dpr);
-  const targetH = Math.round(ch * dpr);
-  if (canvas.width !== targetW || canvas.height !== targetH) {
-    canvas.width = targetW;
-    canvas.height = targetH;
-  }
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cw, ch);
-
-  const boxes = viewMode === "compare" ? [panelBox("left"), panelBox("right")] : [panelBox("right")];
-  const prefix = hasTemperature ? "" : "≈";
-  const wRoi = drag?.kind === "draw" && drag.target === "wound" ? drag.roi : rois.wound;
-  const rRoi = drag?.kind === "draw" && drag.target === "ref" ? drag.roi : rois.ref;
-
-  for (const box of boxes) {
-    const woundLabel = lastState?.wound
-      ? `创口 ${prefix}${lastState.wound.mean.toFixed(1)}°C${roiDimLabel(wRoi, box)}`
-      : `创口${roiDimLabel(wRoi, box)}`;
-    const refLabel = lastState?.ref
-      ? `对照 ${prefix}${lastState.ref.mean.toFixed(1)}°C${roiDimLabel(rRoi, box)}`
-      : `对照${roiDimLabel(rRoi, box)}`;
-    drawHandAxis(ctx, box, lastState?.pose);
-    strokeRoi(ctx, box, wRoi, "#ffb020", woundLabel);
-    strokeRoi(ctx, box, rRoi, "#6bc2ff", refLabel);
-    if (pinnedSpot) drawPinnedSpot(ctx, box, pinnedSpot);
-  }
+function clampRoi(r) {
+  const w = Math.min(1, Math.max(0.03, r.w));
+  const h = Math.min(1, Math.max(0.03, r.h));
+  const x = Math.min(1 - w, Math.max(0, r.x));
+  const y = Math.min(1 - h, Math.max(0, r.y));
+  return { x, y, w, h };
 }
 
-function drawHandAxis(ctx, box, pose) {
-  if (!pose || box.w < 24 || box.h < 24) return;
-  const cx = box.x + pose.cx * box.w;
-  const cy = box.y + pose.cy * box.h;
-  const rad = (pose.angle_deg * Math.PI) / 180;
-  const len = Math.min(box.w, box.h) * 0.13;
-  ctx.save();
-  ctx.strokeStyle = "rgba(126, 226, 168, 0.48)";
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath();
-  ctx.moveTo(cx - Math.cos(rad) * len, cy - Math.sin(rad) * len);
-  ctx.lineTo(cx + Math.cos(rad) * len, cy + Math.sin(rad) * len);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = "rgba(126, 226, 168, 0.85)";
-  ctx.beginPath();
-  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawPinnedSpot(ctx, box, spot) {
-  if (box.w < 20) return;
-  const sx = box.x + spot.x * box.w;
-  const sy = box.y + spot.y * box.h;
-  ctx.save();
-  ctx.strokeStyle = "#0b0d10";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(sx - 7, sy);
-  ctx.lineTo(sx + 7, sy);
-  ctx.moveTo(sx, sy - 7);
-  ctx.lineTo(sx, sy + 7);
-  ctx.stroke();
-  ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(sx - 7, sy);
-  ctx.lineTo(sx + 7, sy);
-  ctx.moveTo(sx, sy - 7);
-  ctx.lineTo(sx, sy + 7);
-  ctx.stroke();
-
-  const label = `${spot.estimated ? "≈" : ""}${spot.temp.toFixed(2)}°C`;
-  ctx.font = "600 11px Microsoft YaHei, Segoe UI, sans-serif";
-  const tw = ctx.measureText(label).width;
-  const lx = Math.min(box.x + box.w - tw - 10, sx + 9);
-  const ly = Math.max(box.y + 18, sy - 6);
-  ctx.fillStyle = "rgba(11, 13, 16, 0.88)";
-  ctx.fillRect(lx - 4, ly - 11, tw + 8, 15);
-  ctx.fillStyle = "#f3f1eb";
-  ctx.fillText(label, lx, ly);
-  ctx.restore();
-}
-
-function strokeRoi(ctx, box, roi, color, label) {
-  if (!roi || box.w < 2 || box.h < 2 || roi.w <= 0 || roi.h <= 0) return;
+function drawBoxOn(ctx, box, roi, color, tag, showHandles) {
+  if (!roi || box.w < 10) return;
   const x = box.x + roi.x * box.w;
   const y = box.y + roi.y * box.h;
   const w = roi.w * box.w;
   const h = roi.h * box.h;
 
   ctx.save();
-  ctx.strokeStyle = "rgba(11, 13, 16, 0.9)";
+  ctx.strokeStyle = "rgba(0,0,0,0.75)";
   ctx.lineWidth = 4;
-  ctx.strokeRect(x + 1, y + 1, w, h);
+  ctx.strokeRect(x, y, w, h);
 
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
-  ctx.strokeRect(x + 1, y + 1, w, h);
+  ctx.strokeRect(x, y, w, h);
 
-  // 四角微调手柄
-  const hs = 6;
-  const pts = [
-    [x + 1, y + 1],
-    [x + 1 + w, y + 1],
-    [x + 1, y + 1 + h],
-    [x + 1 + w, y + 1 + h],
-  ];
-  for (const [cx, cy] of pts) {
-    ctx.fillStyle = "#0b0d10";
-    ctx.fillRect(cx - hs / 2 - 1, cy - hs / 2 - 1, hs + 2, hs + 2);
-    ctx.fillStyle = color;
-    ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
-  }
-
-  ctx.font = "600 11.5px Microsoft YaHei, Segoe UI, sans-serif";
-  const tw = ctx.measureText(label).width;
-  const lx = Math.max(box.x + 2, Math.min(box.x + box.w - tw - 12, x + 2));
-  const ly = y >= box.y + 22 ? y - 6 : y + 17;
-  ctx.fillStyle = "rgba(11, 13, 16, 0.84)";
-  ctx.fillRect(lx - 4, ly - 12, tw + 8, 16);
+  ctx.font = "600 11.5px 'Segoe UI', 'Microsoft YaHei', sans-serif";
+  const textW = ctx.measureText(tag).width + 10;
+  const pillY = y >= 22 ? y - 20 : y + 4;
+  ctx.fillStyle = "rgba(10, 18, 24, 0.86)";
+  ctx.fillRect(x, pillY, textW, 18);
   ctx.fillStyle = color;
-  ctx.fillText(label, lx, ly);
+  ctx.fillText(tag, x + 5, pillY + 13);
+
+  if (showHandles) {
+    const hs = 6;
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    for (const [cx, cy] of [
+      [x, y],
+      [x + w, y],
+      [x, y + h],
+      [x + w, y + h],
+    ]) {
+      ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+      ctx.strokeRect(cx - hs / 2, cy - hs / 2, hs, hs);
+    }
+  }
   ctx.restore();
 }
 
-function setMode(mode) {
-  drawMode = mode;
-  modeWoundBtn.classList.toggle("is-on", mode === "wound");
-  modeRefBtn.classList.toggle("is-on", mode === "ref");
+function paint() {
+  const rect = viewport.getBoundingClientRect();
+  if (rect.width < 10 || rect.height < 10) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.round(rect.width * dpr);
+  const ch = Math.round(rect.height * dpr);
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw;
+    canvas.height = ch;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  const box = panelBox("right");
+  if (box.w < 10) return;
+
+  const showHandles = !autoFollow;
+  const woundLabel =
+    lastState?.wound?.mean !== undefined
+      ? `创口 ${hasTemperature ? "" : "≈"}${lastState.wound.mean.toFixed(1)}°C`
+      : "创口";
+  const refLabel =
+    lastState?.ref?.mean !== undefined
+      ? `对照 ${hasTemperature ? "" : "≈"}${lastState.ref.mean.toFixed(1)}°C`
+      : "对照";
+
+  drawBoxOn(ctx, box, rois.ref, "#6bc2ff", refLabel, showHandles);
+  drawBoxOn(ctx, box, rois.wound, "#ffb020", woundLabel, showHandles);
+  if (drag && drag.kind === "draw" && drag.roi) {
+    drawBoxOn(ctx, box, drag.roi, drag.target === "wound" ? "#ffb020" : "#6bc2ff", drag.target === "wound" ? "新建创口" : "新建对照", false);
+  }
+
+  if (pinnedSpot && (hasTemperature || hasEstimatedTemp)) {
+    const px = box.x + pinnedSpot.x * box.w;
+    const py = box.y + pinnedSpot.y * box.h;
+    ctx.save();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.moveTo(px - 10, py);
+    ctx.lineTo(px + 10, py);
+    ctx.moveTo(px, py - 10);
+    ctx.lineTo(px, py + 10);
+    ctx.stroke();
+    const label = `${pinnedSpot.estimated ? "≈" : ""}${pinnedSpot.temp.toFixed(2)}°C`;
+    ctx.font = "600 11.5px 'Segoe UI', sans-serif";
+    const lw = ctx.measureText(label).width + 10;
+    ctx.fillStyle = "rgba(8, 17, 24, 0.88)";
+    ctx.fillRect(px + 10, py - 11, lw, 19);
+    ctx.fillStyle = "#5eead4";
+    ctx.fillText(label, px + 15, py + 2);
+    ctx.restore();
+  }
 }
 
-canvas.addEventListener("mouseenter", () => {
-  isHovering = true;
-});
+function setMode(target) {
+  drawMode = target;
+  modeWoundBtn.classList.toggle("is-on", target === "wound");
+  modeRefBtn.classList.toggle("is-on", target === "ref");
+}
 
 canvas.addEventListener("mousedown", (event) => {
-  const point = pointerRatio(event);
-  if (!point.inside) return;
-  const hit = hitTestRoi(point);
-  if (hit && hit.kind === "resize") {
-    setMode(hit.target);
+  if (event.button !== 0) return;
+  const pt = pointerRatio(event);
+  if (!pt.inside) return;
+  const hit = hitTestRois(pt.px, pt.py, pt.panel);
+  if (hit) {
+    const orig = { ...rois[hit.target] };
     drag = {
-      kind: "resize",
+      kind: hit.kind,
       target: hit.target,
-      corner: hit.corner,
-      orig: { ...rois[hit.target] },
+      corner: hit.corner || "",
+      x0: pt.x,
+      y0: pt.y,
+      orig,
       moved: false,
     };
-    canvas.style.cursor = hit.cursor;
-  } else if (hit && hit.kind === "move") {
-    setMode(hit.target);
-    const r = rois[hit.target];
-    drag = {
-      kind: "move",
-      target: hit.target,
-      offsetX: point.x - r.x,
-      offsetY: point.y - r.y,
-      startX: point.x,
-      startY: point.y,
-      moved: false,
-    };
-    canvas.style.cursor = "grabbing";
+    canvas.style.cursor = hit.kind === "move" ? "grabbing" : cursorForHit(hit);
   } else {
-    drag = {
-      kind: "draw",
-      target: drawMode,
-      x0: point.x,
-      y0: point.y,
-      roi: { x: point.x, y: point.y, w: 0, h: 0 },
-      moved: false,
-    };
-    canvas.style.cursor = "crosshair";
+    drag = { kind: "draw", target: drawMode, x0: pt.x, y0: pt.y, roi: null, moved: false };
   }
-  paint();
 });
 
 canvas.addEventListener("mousemove", async (event) => {
   isHovering = true;
-  const point = pointerRatio(event);
-  if (drag) {
-    if (drag.kind === "move") {
-      const r = rois[drag.target];
-      const nx = Math.min(Math.max(point.x - drag.offsetX, 0), 1 - r.w);
-      const ny = Math.min(Math.max(point.y - drag.offsetY, 0), 1 - r.h);
-      if (Math.hypot(point.x - drag.startX, point.y - drag.startY) > 0.004) {
-        drag.moved = true;
-      }
-      rois[drag.target] = { x: nx, y: ny, w: r.w, h: r.h };
-    } else if (drag.kind === "resize") {
-      const o = drag.orig;
-      let x0 = o.x;
-      let y0 = o.y;
-      let x1 = o.x + o.w;
-      let y1 = o.y + o.h;
-      const minS = 0.03;
-      if (drag.corner.includes("w")) x0 = Math.min(point.x, x1 - minS);
-      if (drag.corner.includes("e")) x1 = Math.max(point.x, x0 + minS);
-      if (drag.corner.includes("n")) y0 = Math.min(point.y, y1 - minS);
-      if (drag.corner.includes("s")) y1 = Math.max(point.y, y0 + minS);
-      x0 = Math.max(0, x0);
-      y0 = Math.max(0, y0);
-      x1 = Math.min(1, x1);
-      y1 = Math.min(1, y1);
-      rois[drag.target] = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-      drag.moved = true;
-    } else if (drag.kind === "draw") {
-      const x = Math.min(drag.x0, point.x);
-      const y = Math.min(drag.y0, point.y);
-      const w = Math.abs(point.x - drag.x0);
-      const h = Math.abs(point.y - drag.y0);
-      drag.roi = { x, y, w, h };
-      if (w >= 0.02 && h >= 0.02) drag.moved = true;
+  const pt = pointerRatio(event);
+  if (!drag) {
+    canvas.style.cursor = pt.inside ? cursorForHit(hitTestRois(pt.px, pt.py, pt.panel)) : "default";
+    if (!pt.inside || (!hasTemperature && !hasEstimatedTemp)) {
+      probeEl.hidden = true;
+      return;
     }
-    paint();
-  } else {
-    const hit = hitTestRoi(point);
-    canvas.style.cursor = hit ? hit.cursor : point.inside ? "crosshair" : "default";
-  }
-
-  if ((!hasTemperature && !hasEstimatedTemp) || !point.inside) {
-    probeEl.hidden = true;
+    const now = performance.now();
+    if (now - lastProbeAt < 90) return;
+    lastProbeAt = now;
+    const seq = ++probeSeq;
+    try {
+      const res = await fetch(`/api/point?x=${pt.x.toFixed(4)}&y=${pt.y.toFixed(4)}`).then((r) => r.json());
+      if (seq !== probeSeq || !isHovering) return;
+      if (res && res.ok) {
+        probeEl.hidden = false;
+        probeEl.textContent = `${res.estimated ? "反演点温 ≈" : "点温 "}${res.temp.toFixed(2)} °C  (${res.px}, ${res.py})`;
+      } else {
+        probeEl.hidden = true;
+      }
+    } catch (_err) {
+      // 忽略
+    }
     return;
   }
-  const now = performance.now();
-  if (now - lastProbeAt < 80) return;
-  lastProbeAt = now;
-  const reqSeq = ++probeSeq;
-  try {
-    const res = await fetch(`/api/point?x=${point.x.toFixed(4)}&y=${point.y.toFixed(4)}`).then((r) => r.json());
-    if (isHovering && reqSeq === probeSeq && (hasTemperature || hasEstimatedTemp) && res.ok) {
-      probeEl.hidden = false;
-      const tag = res.estimated ? "反演点温 ≈" : "点温";
-      probeEl.textContent = `${tag} ${res.temp.toFixed(2)} °C (${res.px}, ${res.py})`;
-    }
-  } catch (_err) {
-    // 忽略瞬时查询失败
+
+  const dx = pt.x - drag.x0;
+  const dy = pt.y - drag.y0;
+  if (Math.hypot(dx, dy) > 0.008) drag.moved = true;
+
+  if (drag.kind === "draw") {
+    const x = Math.min(drag.x0, pt.x);
+    const y = Math.min(drag.y0, pt.y);
+    const w = Math.abs(pt.x - drag.x0);
+    const h = Math.abs(pt.y - drag.y0);
+    if (w >= 0.025 && h >= 0.025) drag.roi = clampRoi({ x, y, w, h });
+  } else if (drag.kind === "move") {
+    rois[drag.target] = clampRoi({
+      x: drag.orig.x + dx,
+      y: drag.orig.y + dy,
+      w: drag.orig.w,
+      h: drag.orig.h,
+    });
+  } else if (drag.kind === "resize") {
+    const o = drag.orig;
+    let x0 = o.x;
+    let y0 = o.y;
+    let x1 = o.x + o.w;
+    let y1 = o.y + o.h;
+    if (drag.corner.includes("w")) x0 = Math.min(x1 - 0.03, Math.max(0, pt.x));
+    if (drag.corner.includes("e")) x1 = Math.max(x0 + 0.03, Math.min(1, pt.x));
+    if (drag.corner.includes("n")) y0 = Math.min(y1 - 0.03, Math.max(0, pt.y));
+    if (drag.corner.includes("s")) y1 = Math.max(y0 + 0.03, Math.min(1, pt.y));
+    rois[drag.target] = clampRoi({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
   }
+  paint();
 });
 
 canvas.addEventListener("mouseleave", () => {
@@ -587,19 +685,26 @@ canvas.addEventListener("mouseleave", () => {
   finishDrag(false);
 });
 
+async function commitManualRois() {
+  const woundPayload = rois.wound || { ...DEFAULT_WOUND };
+  const refPayload = rois.ref || { ...DEFAULT_REF };
+  rois.wound = woundPayload;
+  rois.ref = refPayload;
+  await sendAction("/api/roi", { wound: woundPayload, ref: refPayload, manual: true });
+}
+
 async function finishDrag(allowPin = true) {
   if (!drag) return;
   const current = drag;
   drag = null;
   canvas.style.cursor = "crosshair";
 
-  if (current.kind === "draw" && current.moved) {
+  if (current.kind === "draw" && current.moved && current.roi) {
     rois[current.target] = current.roi;
     await commitManualRois();
   } else if ((current.kind === "move" || current.kind === "resize") && current.moved) {
     await commitManualRois();
   } else if (allowPin && current.kind === "draw" && (hasTemperature || hasEstimatedTemp)) {
-    // 轻点空白处：固定/清除该点测温标记
     if (pinnedSpot && Math.hypot(pinnedSpot.x - current.x0, pinnedSpot.y - current.y0) < 0.04) {
       pinnedSpot = null;
     } else {
@@ -616,14 +721,6 @@ async function finishDrag(allowPin = true) {
   paint();
 }
 
-async function commitManualRois() {
-  const woundPayload = rois.wound || { ...DEFAULT_WOUND };
-  const refPayload = rois.ref || { ...DEFAULT_REF };
-  rois.wound = woundPayload;
-  rois.ref = refPayload;
-  await sendAction("/api/roi", { wound: woundPayload, ref: refPayload, manual: true });
-}
-
 canvas.addEventListener("mouseup", () => finishDrag(true));
 window.addEventListener("resize", paint);
 frame.addEventListener("load", paint);
@@ -633,7 +730,7 @@ frame.addEventListener("error", () => {
   }, 1000);
 });
 
-/* ===== 渲染辅助：色标尺、热扩散、多区域、SVG 趋势图 ===== */
+/* ===== 实时筛查渲染 ===== */
 function updateScaleBar(state) {
   const showScale = hasTemperature || viewMode === "isotherm";
   scaleEl.hidden = !showScale;
@@ -726,108 +823,57 @@ function renderPhysics(physics) {
   }
 }
 
-function renderTrendChart(recordsDesc) {
-  const ns = "http://www.w3.org/2000/svg";
-  trendChartEl.replaceChildren();
-  const points = [...(recordsDesc || [])].slice(0, 14).reverse();
-  const W = 340;
-  const H = 124;
-  const padL = 28;
-  const padR = 12;
-  const padT = 12;
-  const padB = 18;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-
-  const mk = (tag, attrs = {}) => {
-    const el = document.createElementNS(ns, tag);
-    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-    return el;
-  };
-
-  if (points.length === 0) {
-    const txt = mk("text", { x: W / 2, y: H / 2 + 4, "text-anchor": "middle", fill: "#7d838e", "font-size": "11" });
-    txt.textContent = "保存至少 1 条记录后自动生成 ΔT 趋势图";
-    trendChartEl.appendChild(txt);
+function renderClinicalPreview(state) {
+  clinicalRuleBadgeEl.classList.remove("is-pass", "is-warn", "is-block");
+  if (importedAnalysis) {
+    if (importedAnalysis.ok && importedAnalysis.rule_result) {
+      const lv = importedAnalysis.rule_result.level;
+      clinicalRuleBadgeEl.classList.add(lv === "normal" ? "is-pass" : "is-warn");
+      clinicalRuleBadgeEl.textContent = importedAnalysis.rule_result.label;
+    } else {
+      clinicalRuleBadgeEl.classList.add("is-block");
+      clinicalRuleBadgeEl.textContent = "门禁阻断";
+    }
     return;
   }
-
-  const maxVal = Math.max(3.2, ...points.map((p) => p.delta + 0.4));
-  const minVal = Math.min(0.0, ...points.map((p) => p.delta - 0.2));
-  const yOf = (v) => padT + ((maxVal - v) / Math.max(0.5, maxVal - minVal)) * plotH;
-  const xOf = (i) => (points.length === 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW);
-
-  // 阈值虚线: 1.0°C (关注) 与 2.2°C (告警)
-  for (const [thr, color, label] of [
-    [1.0, "#f5a524", "1.0"],
-    [2.2, "#ff6347", "2.2"],
-  ]) {
-    if (thr >= minVal && thr <= maxVal) {
-      const y = yOf(thr);
-      trendChartEl.appendChild(
-        mk("line", { x1: padL, y1: y, x2: W - padR, y2: y, stroke: color, "stroke-opacity": "0.45", "stroke-dasharray": "4 3", "stroke-width": "1" })
-      );
-      const t = mk("text", { x: 2, y: y + 3, fill: color, "font-size": "9.5" });
-      t.textContent = label;
-      trendChartEl.appendChild(t);
-    }
+  if (!state.has_temperature || state.delta === null || state.delta === undefined) {
+    clinicalRuleBadgeEl.classList.add("is-block");
+    clinicalRuleBadgeEl.textContent = "无温度矩阵（门禁阻断）";
+    return;
   }
-
-  // 折线与节点
-  const coords = points.map((p, i) => [xOf(i), yOf(p.delta)]);
-  if (coords.length >= 2) {
-    const dStr = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-    trendChartEl.appendChild(
-      mk("path", { d: dStr, fill: "none", stroke: "#6bc2ff", "stroke-width": "2", "stroke-linejoin": "round", "stroke-linecap": "round" })
-    );
+  if (state.unstable || (state.frame_count || 0) < 5) {
+    clinicalRuleBadgeEl.classList.add("is-block");
+    clinicalRuleBadgeEl.textContent = state.unstable ? "画面波动（阻断）" : `稳态累积 ${state.frame_count || 0}/5 帧`;
+    return;
   }
-
-  points.forEach((rec, i) => {
-    const [cx, cy] = coords[i];
-    const color = rec.delta >= 2.2 ? "#ff6347" : rec.delta >= 1.0 ? "#f5a524" : "#4cc38a";
-    const isActive = rec.npy_path && rec.npy_path === activeReplayPath;
-    const circle = mk("circle", {
-      cx: cx.toFixed(1),
-      cy: cy.toFixed(1),
-      r: isActive ? "5.5" : "4",
-      fill: color,
-      stroke: isActive ? "#ffffff" : "#0b0d10",
-      "stroke-width": "1.6",
-      style: "cursor:pointer",
-    });
-    const tip = document.createElementNS(ns, "title");
-    tip.textContent = `${(rec.time || "").replace("T", " ")} [${rec.group}] ΔT ${rec.delta >= 0 ? "+" : ""}${rec.delta.toFixed(2)}°C（点击复盘）`;
-    circle.appendChild(tip);
-    circle.addEventListener("click", () => replayRecord(rec));
-    trendChartEl.appendChild(circle);
-  });
-}
-
-async function replayRecord(rec) {
-  const res = await sendAction("/api/replay", {
-    npy_path: rec.npy_path,
-    wound_px: rec.wound_px,
-    ref_px: rec.ref_px,
-  });
-  if (res && res.ok) {
-    activeReplayPath = rec.npy_path || "";
-    showToast(`已回载历史温度帧：${(rec.npy_path || "").split(/[\\/]/).pop()}`);
-    if (lastRecordsData) {
-      renderTrendChart(lastRecordsData.records);
-      highlightReplayRow();
-    }
+  const d = Number(state.delta);
+  if (d < -0.6) {
+    clinicalRuleBadgeEl.classList.add("is-warn");
+    clinicalRuleBadgeEl.textContent = "局部低温（警惕灌注不足）";
+  } else if (d < 0.6) {
+    clinicalRuleBadgeEl.classList.add("is-pass");
+    clinicalRuleBadgeEl.textContent = "未见明显热异常";
+  } else if (d < 2.2) {
+    clinicalRuleBadgeEl.classList.add("is-warn");
+    clinicalRuleBadgeEl.textContent = "可疑炎症（建议复测）";
   } else {
-    showToast(res?.error || "回载历史帧失败", true);
+    clinicalRuleBadgeEl.classList.add("is-warn");
+    clinicalRuleBadgeEl.textContent = "显著热异常（感染风险增高）";
   }
 }
 
-function highlightReplayRow() {
-  for (const btn of historyListEl.querySelectorAll(".history-item")) {
-    btn.classList.toggle("is-active", btn.dataset.npy === activeReplayPath && activeReplayPath !== "");
+function renderImportedBanner() {
+  if (!importedMeasurement) {
+    importedBannerEl.hidden = true;
+    return;
   }
+  importedBannerEl.hidden = false;
+  const m = importedMeasurement.metrics || {};
+  const ruleLabel = importedAnalysis?.rule_result?.label || "质量门禁未通过";
+  importedBannerTitleEl.textContent = `${importedMeasurement.measurement_id || "导入测量"} · ${ruleLabel}`;
+  importedBannerSubEl.textContent = `Tw ${Number(m.t_wound_mean_c || 0).toFixed(2)}°C · Tref ${Number(m.t_ref_far_c || 0).toFixed(2)}°C · ΔT ${fmtDelta(m.delta_t_c)}`;
 }
 
-/* ===== 主状态渲染 ===== */
 function renderState(state) {
   lastState = state;
   hasTemperature = Boolean(state.has_temperature);
@@ -840,7 +886,6 @@ function renderState(state) {
     activeReplayPath = "";
   }
 
-  // 顶部连接/帧率状态灯
   connBadgeEl.classList.remove("is-live", "is-warn", "is-err");
   if (state.error) {
     connBadgeEl.classList.add("is-err");
@@ -852,10 +897,9 @@ function renderState(state) {
     connBadgeEl.classList.add("is-live");
     connBadgeEl.textContent = `运行中 · ${state.fps ? state.fps.toFixed(1) : "—"} fps`;
   } else {
-    connBadgeEl.textContent = "已停止 / 待机";
+    connBadgeEl.textContent = "待机";
   }
 
-  // 模式横幅（锁定或复盘）
   if (state.source === "replay") {
     modeBannerEl.hidden = false;
     modeBannerEl.classList.add("is-replay");
@@ -870,7 +914,6 @@ function renderState(state) {
     modeBannerEl.hidden = true;
   }
 
-  // ROI 同步
   if (state.auto && !drag) {
     rois.wound = state.wound_roi || null;
     rois.ref = state.ref_roi || null;
@@ -883,7 +926,6 @@ function renderState(state) {
     paint();
   }
 
-  // 视图同步
   if (state.view) {
     viewMode = state.view;
     syncViewTabs(state.view);
@@ -914,7 +956,6 @@ function renderState(state) {
     emissivityEl.value = Number(state.emissivity).toFixed(2);
   }
 
-  // 画布左下角手姿引导胶囊
   if (state.pose && state.pose.hint) {
     poseChipEl.hidden = false;
     poseChipEl.textContent = state.pose.hint;
@@ -924,7 +965,6 @@ function renderState(state) {
   }
   alignPoseBtn.disabled = !state.pose;
 
-  // 10 帧稳态采集按钮
   measureBtn.disabled = !hasTemperature || (!state.running && measureState !== "locked");
   measureBtn.classList.toggle("is-locked", measureState === "locked");
   measureBtn.classList.toggle("is-collecting", measureState === "collecting");
@@ -936,7 +976,6 @@ function renderState(state) {
     measureLabelEl.textContent = "稳定采 10 帧";
   }
 
-  // 归档保存按钮状态（底部栏 + Tab 3）
   const canSave =
     hasTemperature &&
     state.delta !== null &&
@@ -946,97 +985,114 @@ function renderState(state) {
     Boolean(state.ref_roi);
   saveBtn.disabled = !canSave;
   saveLabBtn.disabled = !canSave;
-  if (!hasTemperature) {
-    saveBtn.title = "仅温度矩阵模式支持正式归档记录";
-  } else if (state.unstable) {
-    saveBtn.title = "当前画面波动超过 0.3 °C，稳定后可保存";
-  } else if (state.delta === null || state.delta === undefined || !state.wound_roi || !state.ref_roi) {
-    saveBtn.title = "请先框选创口与对照区域（或切手动框选）";
-  } else {
-    saveBtn.title = "快捷键 S：归档保存当前温度矩阵、截图与记录";
-  }
 
-  // 稳定性胶囊
-  stabilityEl.classList.remove("is-ok", "is-warn", "is-locked");
-  if (!hasTemperature) {
-    if (state.osd && state.osd.anchor_mode) {
-      stabilityEl.hidden = false;
-      stabilityEl.classList.add("is-ok");
-      stabilityEl.textContent = state.osd.anchor_mode;
-    } else {
-      stabilityEl.hidden = true;
+  // 若已导入测量 JSON，顶部 4 格 KPI 优先展示导入的临床测量，方便演示与审阅
+  const mImp = importedMeasurement?.metrics || null;
+  if (mImp) {
+    const dt = Number(mImp.delta_t_c);
+    const lv = !importedAnalysis?.ok ? "none" : dt >= 2.2 ? "2" : dt >= 1.0 ? "1" : "0";
+    heroCardEl.dataset.level = lv;
+    deltaEl.dataset.level = lv;
+    deltaEl.classList.toggle("is-empty", !Number.isFinite(dt));
+    deltaEl.textContent = Number.isFinite(dt) ? fmtDelta(dt) : "暂无温差";
+    deltaMaxBadgeEl.hidden = !Number.isFinite(Number(mImp.t_wound_max_c));
+    if (Number.isFinite(Number(mImp.t_wound_max_c))) {
+      deltaMaxBadgeEl.textContent = `最高 ${Number(mImp.t_wound_max_c).toFixed(2)}°C`;
     }
-  } else {
+    gradeEl.textContent = importedAnalysis?.rule_result?.label || "质量门禁未通过";
     stabilityEl.hidden = false;
-    if (measureState === "locked") {
-      stabilityEl.classList.add("is-locked");
-      stabilityEl.textContent = `已锁定 · ${(state.skin_spread ?? 0).toFixed(2)}°C`;
-    } else if (state.unstable) {
-      stabilityEl.classList.add("is-warn");
-      stabilityEl.textContent = "波动 > 0.3°C";
-    } else {
-      stabilityEl.classList.add("is-ok");
-      stabilityEl.textContent =
-        state.skin_spread !== null && state.skin_spread !== undefined
-          ? `稳定 · ${state.skin_spread.toFixed(2)}°C`
-          : "稳定";
-    }
-  }
-
-  // Hero 卡片评级、主数字与三级游标尺
-  gradeEl.textContent = state.grade_text || "等待画面";
-  const level = state.grade === null || state.grade === undefined ? "none" : String(state.grade);
-  heroCardEl.dataset.level = level;
-  deltaEl.dataset.level = level;
-  deltaEl.classList.toggle("is-empty", state.delta === null || state.delta === undefined);
-  deltaEl.replaceChildren();
-  if (state.delta === null || state.delta === undefined) {
-    deltaEl.textContent = "暂无温差";
-    deltaMaxBadgeEl.hidden = true;
-    gaugePinEl.hidden = true;
-  } else {
-    const approx = hasTemperature ? "" : "≈";
-    const sign = state.delta >= 0 ? "+" : "";
-    deltaEl.append(document.createTextNode(`${approx}${sign}${state.delta.toFixed(2)}`));
-    const unit = document.createElement("span");
-    unit.textContent = "°C";
-    deltaEl.appendChild(unit);
-
-    if (state.delta_max !== null && state.delta_max !== undefined) {
-      deltaMaxBadgeEl.hidden = false;
-      deltaMaxBadgeEl.textContent = `峰值 ${approx}${state.delta_max >= 0 ? "+" : ""}${state.delta_max.toFixed(2)}°C`;
-    } else {
-      deltaMaxBadgeEl.hidden = true;
-    }
-
-    // 游标位置：0..4.0°C 映射到 0%..100%（与 zone-0 25% = 1.0°C, zone-1 30% = 2.2°C 对齐）
-    const pct = Math.min(100, Math.max(0, (state.delta / 4.0) * 100));
-    gaugePinEl.hidden = false;
+    stabilityEl.className = `pill ${importedAnalysis?.ok ? "is-ok" : "is-warn"}`;
+    stabilityEl.textContent = importedAnalysis?.ok ? "已导入 · 质控通过" : "已导入 · 门禁阻断";
+    cardWoundValEl.textContent = Number.isFinite(Number(mImp.t_wound_mean_c)) ? `${Number(mImp.t_wound_mean_c).toFixed(2)} °C` : "—";
+    cardWoundSubEl.textContent = "导入测量 · 创口区";
+    cardRefValEl.textContent = Number.isFinite(Number(mImp.t_ref_far_c)) ? `${Number(mImp.t_ref_far_c).toFixed(2)} °C` : "—";
+    cardRefSubEl.textContent = "导入测量 · 远端参考";
+    kpiExtraValEl.textContent = Number.isFinite(Number(mImp.area_ratio)) ? `${(Number(mImp.area_ratio) * 100).toFixed(1)} %` : "—";
+    kpiExtraSubEl.textContent = `${importedMeasurement.device?.model || "HM-TB421-3XF"} · 导入 JSON`;
+    const pct = Number.isFinite(dt) ? Math.min(100, Math.max(0, (dt / 4.0) * 100)) : 0;
+    gaugePinEl.hidden = !Number.isFinite(dt);
     gaugePinEl.style.left = `${pct.toFixed(1)}%`;
+  } else {
+    stabilityEl.classList.remove("is-ok", "is-warn", "is-locked");
+    if (!hasTemperature) {
+      if (state.osd && state.osd.anchor_mode) {
+        stabilityEl.hidden = false;
+        stabilityEl.classList.add("is-ok");
+        stabilityEl.textContent = state.osd.anchor_mode;
+      } else {
+        stabilityEl.hidden = true;
+      }
+    } else {
+      stabilityEl.hidden = false;
+      if (measureState === "locked") {
+        stabilityEl.classList.add("is-locked");
+        stabilityEl.textContent = `已锁定 · ${(state.skin_spread ?? 0).toFixed(2)}°C`;
+      } else if (state.unstable) {
+        stabilityEl.classList.add("is-warn");
+        stabilityEl.textContent = "波动 > 0.3°C";
+      } else {
+        stabilityEl.classList.add("is-ok");
+        stabilityEl.textContent =
+          state.skin_spread !== null && state.skin_spread !== undefined
+            ? `稳定 · ${state.skin_spread.toFixed(2)}°C`
+            : "稳定";
+      }
+    }
+
+    gradeEl.textContent = state.grade_text || "等待画面";
+    const level = state.grade === null || state.grade === undefined ? "none" : String(state.grade);
+    heroCardEl.dataset.level = level;
+    deltaEl.dataset.level = level;
+    deltaEl.classList.toggle("is-empty", state.delta === null || state.delta === undefined);
+    deltaEl.replaceChildren();
+    if (state.delta === null || state.delta === undefined) {
+      deltaEl.textContent = "暂无温差";
+      deltaMaxBadgeEl.hidden = true;
+      gaugePinEl.hidden = true;
+    } else {
+      const approx = hasTemperature ? "" : "≈";
+      const sign = state.delta >= 0 ? "+" : "";
+      deltaEl.append(document.createTextNode(`${approx}${sign}${state.delta.toFixed(2)}`));
+      const unit = document.createElement("span");
+      unit.textContent = "°C";
+      deltaEl.appendChild(unit);
+      if (state.delta_max !== null && state.delta_max !== undefined) {
+        deltaMaxBadgeEl.hidden = false;
+        deltaMaxBadgeEl.textContent = `峰值 ${approx}${state.delta_max >= 0 ? "+" : ""}${state.delta_max.toFixed(2)}°C`;
+      } else {
+        deltaMaxBadgeEl.hidden = true;
+      }
+      const pct = Math.min(100, Math.max(0, (state.delta / 4.0) * 100));
+      gaugePinEl.hidden = false;
+      gaugePinEl.style.left = `${pct.toFixed(1)}%`;
+    }
+
+    const prefix = hasTemperature ? "" : "≈";
+    if (state.wound) {
+      cardWoundValEl.textContent = `${prefix}${state.wound.mean.toFixed(2)} °C`;
+      cardWoundSubEl.textContent = `峰值 ${state.wound.max.toFixed(2)} °C${state.wound.n ? ` · ${state.wound.n} px` : ""}`;
+    } else {
+      cardWoundValEl.textContent = "—";
+      cardWoundSubEl.textContent = "未框选";
+    }
+    if (state.ref) {
+      cardRefValEl.textContent = `${prefix}${state.ref.mean.toFixed(2)} °C`;
+      cardRefSubEl.textContent = state.ref.n ? `有效皮肤 ${state.ref.n} px` : "正常皮肤对照";
+    } else {
+      cardRefValEl.textContent = "—";
+      cardRefSubEl.textContent = "未框选";
+    }
+
+    kpiExtraValEl.textContent = state.mask_fraction ? `${Math.round(state.mask_fraction * 100)} %` : state.fps ? `${state.fps.toFixed(1)} fps` : "—";
+    kpiExtraSubEl.textContent = `${state.capture_backend || state.source_label || "待机"} · ${state.distance_mm || 300}mm`;
   }
 
-  // 创口 vs 对照双卡
-  const prefix = hasTemperature ? "" : "≈";
-  if (state.wound) {
-    cardWoundValEl.textContent = `${prefix}${state.wound.mean.toFixed(2)} °C`;
-    cardWoundSubEl.textContent = `峰值 ${state.wound.max.toFixed(2)} °C${state.wound.n ? ` · ${state.wound.n} px` : ""}`;
-  } else {
-    cardWoundValEl.textContent = "—";
-    cardWoundSubEl.textContent = "未框选";
-  }
-  if (state.ref) {
-    cardRefValEl.textContent = `${prefix}${state.ref.mean.toFixed(2)} °C`;
-    cardRefSubEl.textContent = state.ref.n ? `有效皮肤 ${state.ref.n} px` : "正常皮肤对照";
-  } else {
-    cardRefValEl.textContent = "—";
-    cardRefSubEl.textContent = "未框选";
-  }
-
+  renderImportedBanner();
+  renderClinicalPreview(state);
   updateScaleBar(state);
   renderRegions(state.regions, state.selected_region || 0);
   renderPhysics(state.physics);
 
-  // Tab 1 传感参数表
   matrixTagEl.textContent = state.matrix ? `${state.matrix.width}×${state.matrix.height}` : "伪彩流";
   const distText = `${state.distance_mm || 300} mm（${state.pixel_mm ? state.pixel_mm.toFixed(2) : "—"} mm/px）`;
   const rows = hasTemperature
@@ -1072,9 +1128,102 @@ function renderState(state) {
   } else {
     messageEl.hidden = true;
   }
+  updateAssistantContext();
 }
 
-/* ===== 历史记录、重复性验收表与 Markdown/CSV 导出 ===== */
+/* ===== 趋势图、历史复盘与课程验收台 ===== */
+function renderTrendChart(recordsDesc) {
+  const ns = "http://www.w3.org/2000/svg";
+  trendChartEl.replaceChildren();
+  const points = [...(recordsDesc || [])].slice(0, 18).reverse();
+  const W = 660;
+  const H = 200;
+  const padL = 38;
+  const padR = 20;
+  const padT = 18;
+  const padB = 26;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const mk = (tag, attrs = {}) => {
+    const el = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+    return el;
+  };
+
+  if (points.length === 0) {
+    const txt = mk("text", { x: W / 2, y: H / 2 + 4, "text-anchor": "middle", fill: "#7d909b", "font-size": "13" });
+    txt.textContent = "采集稳定帧并归档至少 1 条记录后自动生成 ΔT 纵向趋势折线";
+    trendChartEl.appendChild(txt);
+    return;
+  }
+
+  const maxVal = Math.max(3.2, ...points.map((p) => p.delta + 0.4));
+  const minVal = Math.min(0.0, ...points.map((p) => p.delta - 0.2));
+  const yOf = (v) => padT + ((maxVal - v) / Math.max(0.5, maxVal - minVal)) * plotH;
+  const xOf = (i) => (points.length === 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW);
+
+  for (const [thr, color, label] of [
+    [1.0, "#f59e0b", "1.0°C 关注"],
+    [2.2, "#ef4444", "2.2°C 告警"],
+  ]) {
+    if (thr >= minVal && thr <= maxVal) {
+      const y = yOf(thr);
+      trendChartEl.appendChild(
+        mk("line", { x1: padL, y1: y, x2: W - padR, y2: y, stroke: color, "stroke-opacity": "0.55", "stroke-dasharray": "5 4", "stroke-width": "1.2" })
+      );
+      const t = mk("text", { x: W - padR - 66, y: y - 5, fill: color, "font-size": "10.5" });
+      t.textContent = label;
+      trendChartEl.appendChild(t);
+    }
+  }
+
+  const coords = points.map((p, i) => [xOf(i), yOf(p.delta)]);
+  if (coords.length >= 2) {
+    const dStr = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    trendChartEl.appendChild(
+      mk("path", { d: dStr, fill: "none", stroke: "#0f766e", "stroke-width": "2.6", "stroke-linejoin": "round", "stroke-linecap": "round" })
+    );
+  }
+
+  points.forEach((rec, i) => {
+    const [cx, cy] = coords[i];
+    const color = rec.delta >= 2.2 ? "#ef4444" : rec.delta >= 1.0 ? "#f59e0b" : "#16a34a";
+    const isActive = rec.npy_path && rec.npy_path === activeReplayPath;
+    const circle = mk("circle", {
+      cx: cx.toFixed(1),
+      cy: cy.toFixed(1),
+      r: isActive ? "6" : "4.5",
+      fill: color,
+      stroke: "#ffffff",
+      "stroke-width": "2",
+      style: "cursor:pointer",
+    });
+    const tip = document.createElementNS(ns, "title");
+    tip.textContent = `${fmtTime(rec.time)} [${rec.group}] ΔT ${fmtDelta(rec.delta)}（点击复盘）`;
+    circle.appendChild(tip);
+    circle.addEventListener("click", () => replayRecord(rec));
+    trendChartEl.appendChild(circle);
+  });
+}
+
+async function replayRecord(rec) {
+  const res = await sendAction("/api/replay", {
+    npy_path: rec.npy_path,
+    wound_px: rec.wound_px,
+    ref_px: rec.ref_px,
+  });
+  if (res && res.ok) {
+    activeReplayPath = rec.npy_path || "";
+    importedMeasurement = null;
+    importedAnalysis = null;
+    setActivePage("screen");
+    showToast(`已回载历史温度帧：${(rec.npy_path || "").split(/[\\/]/).pop()}`);
+  } else {
+    showToast(res?.error || "回载历史帧失败", true);
+  }
+}
+
 async function loadRecords(notify = false) {
   try {
     const data = await fetch("/api/records").then((r) => r.json());
@@ -1089,21 +1238,19 @@ async function loadRecords(notify = false) {
     }
     renderTrendChart(data.records || []);
 
-    // 分组重复性统计表
     groupStatsEl.replaceChildren();
-    const groups = data.groups || {};
-    const groupEntries = Object.entries(groups);
-    if (groupEntries.length === 0) {
+    const entries = Object.entries(data.groups || {});
+    if (entries.length === 0) {
       const empty = document.createElement("p");
       empty.className = "empty-note";
-      empty.textContent = "暂无归档数据。采集稳定帧后点击“归档记录”即可自动统计各组极差。";
+      empty.textContent = "暂无实验归档数据。采集稳定温度帧后点击“归档记录”即可自动统计分组极差。";
       groupStatsEl.appendChild(empty);
     } else {
-      for (const [gName, st] of groupEntries) {
+      for (const [gName, st] of entries) {
         const row = document.createElement("div");
         row.className = "group-row";
         const left = document.createElement("span");
-        const ntcPart = st.ntc_mae !== null && st.ntc_mae !== undefined ? ` · NTC差 ${st.ntc_mae.toFixed(2)}°C` : "";
+        const ntcPart = st.ntc_mae !== null && st.ntc_mae !== undefined ? ` · NTC 误差 ${st.ntc_mae.toFixed(2)}°C` : "";
         left.textContent = `${gName} (n=${st.count}) 均 ${st.mean >= 0 ? "+" : ""}${st.mean.toFixed(2)}°C${ntcPart}`;
         const right = document.createElement("span");
         if (st.repeatability_ok === null || st.repeatability_ok === undefined) {
@@ -1121,46 +1268,35 @@ async function loadRecords(notify = false) {
       }
     }
 
-    // 历史列表
     historyListEl.replaceChildren();
-    const recs = (data.records || []).slice(0, 15);
+    const recs = (data.records || []).slice(0, 18);
     if (recs.length === 0) {
       const empty = document.createElement("p");
       empty.className = "empty-note";
-      empty.textContent = "暂无历史归档文件";
+      empty.textContent = "暂无 .npy 历史归档文件";
       historyListEl.appendChild(empty);
     } else {
       for (const rec of recs) {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "history-item";
-        btn.dataset.npy = rec.npy_path || "";
-        btn.title = "点击回载该帧 .npy 原始温度矩阵做离线复盘";
-        const meta = document.createElement("div");
-        meta.className = "history-meta";
-        const title = document.createElement("span");
-        title.textContent = `[${rec.group}]  ${(rec.time || "").replace("T", " ").slice(5, 19)}`;
+        btn.className = `list-card-btn ${rec.npy_path && rec.npy_path === activeReplayPath ? "is-active" : ""}`;
+        const main = document.createElement("div");
+        main.className = "list-card-main";
+        const title = document.createElement("strong");
+        title.textContent = `[${rec.group}]  ${fmtTime(rec.time)}`;
         const sub = document.createElement("small");
         const areaStr = rec.hot_area_mm2 ? ` · 面积 ${rec.hot_area_mm2}mm²` : "";
         const ntcStr = rec.ntc_delta !== null && rec.ntc_delta !== undefined ? ` · NTC ${rec.ntc_delta}°C` : "";
-        sub.textContent = `L=${rec.distance_mm}mm${areaStr}${ntcStr}`;
-        meta.append(title, sub);
+        sub.textContent = `L=${rec.distance_mm}mm · ${rec.frames_averaged}帧${areaStr}${ntcStr}`;
+        main.append(title, sub);
 
-        const right = document.createElement("div");
-        right.className = "history-right";
-        const val = document.createElement("strong");
-        val.textContent = `${rec.delta >= 0 ? "+" : ""}${rec.delta.toFixed(2)}°C`;
-        val.style.color = rec.delta >= 2.2 ? "#ff6347" : rec.delta >= 1.0 ? "#f5a524" : "#7ee2a8";
-        const tag = document.createElement("span");
-        tag.className = "muted-tag";
-        tag.textContent = "复盘";
-        right.append(val, tag);
-
-        btn.append(meta, right);
+        const pill = document.createElement("span");
+        pill.className = `gate-pill ${rec.delta >= 2.2 ? "is-block" : rec.delta >= 1.0 ? "is-warn" : "is-pass"}`;
+        pill.textContent = `${fmtDelta(rec.delta)} · 复盘`;
+        btn.append(main, pill);
         btn.addEventListener("click", () => replayRecord(rec));
         historyListEl.appendChild(btn);
       }
-      highlightReplayRow();
     }
     if (notify) showToast("已刷新历史记录与验收统计");
   } catch (_err) {
@@ -1179,11 +1315,7 @@ function buildMarkdownReport() {
   ];
   for (const [gName, st] of Object.entries(data.groups || {})) {
     const verdict =
-      st.repeatability_ok === null || st.repeatability_ok === undefined
-        ? "单次测量"
-        : st.repeatability_ok
-        ? "达标"
-        : "超差";
+      st.repeatability_ok === null || st.repeatability_ok === undefined ? "单次测量" : st.repeatability_ok ? "达标" : "超差";
     const ntc = st.ntc_mae !== null && st.ntc_mae !== undefined ? st.ntc_mae.toFixed(2) : "—";
     lines.push(
       `| ${gName} | ${st.count} | ${st.mean >= 0 ? "+" : ""}${st.mean.toFixed(2)} | ${st.sd.toFixed(3)} | ${st.spread.toFixed(2)} | ${verdict} | ${ntc} |`
@@ -1212,7 +1344,7 @@ async function copyMarkdownTable() {
     }
     showToast("已复制 Markdown 验收统计表到剪贴板");
   } catch (_err) {
-    showToast("剪贴板写入受限，请改用“下载 CSV 记录”", true);
+    showToast("剪贴板写入受限，请使用“下载 CSV”", true);
   }
 }
 
@@ -1231,6 +1363,788 @@ async function doSave() {
   }
 }
 
+/* ===== 设备编码探测 ===== */
+async function runProbe() {
+  probeBtn.disabled = true;
+  probeOutputEl.hidden = false;
+  probeOutputEl.textContent = "正在探测接入摄像头格式、视频编码与 16bit 温度流...";
+  try {
+    const res = await fetch("/api/probe").then((r) => r.json());
+    if (!res || !res.ok) {
+      probeOutputEl.textContent = "探测失败";
+      return;
+    }
+    const lines = [res.summary || "探测完成"];
+    for (const item of res.dshow_options || []) {
+      lines.push(`\n[DirectShow] ${item.label}`);
+      if (item.options && item.options.length) {
+        for (const opt of item.options.slice(0, 8)) lines.push(`  ${opt}`);
+      } else {
+        lines.push("  （未列出扩展格式）");
+      }
+    }
+    for (const p of res.opencv_probes || []) {
+      if (!p.opened && p.mode_requested !== "default") continue;
+      if (p.read_frames > 0) {
+        lines.push(
+          `[OpenCV cam:${p.camera} ${p.backend}/${p.mode_requested}] ${p.width_actual}×${p.height_actual} fourcc=${p.fourcc_actual} dtype=${p.dtype} range=[${p.raw_min}, ${p.raw_max}]`
+        );
+      } else if (p.opened) {
+        lines.push(`[OpenCV cam:${p.camera} ${p.backend}/${p.mode_requested}] 打开但无帧`);
+      }
+    }
+    probeOutputEl.textContent = lines.join("\n");
+  } catch (_err) {
+    probeOutputEl.textContent = "探测请求失败，请检查本机服务。";
+  } finally {
+    probeBtn.disabled = false;
+  }
+}
+
+/* ===== 导入测量 JSON ===== */
+async function loadExampleMeasurement() {
+  try {
+    const res = await fetch("/api/clinic/example").then((r) => r.json());
+    if (!res || !res.ok) {
+      showToast(res?.error?.message || "载入示例测量失败", true);
+      return;
+    }
+    importedMeasurement = res.measurement;
+    importedAnalysis = res.analysis;
+    assistantMessages = [];
+    renderAssistantMessages();
+    if (lastState) renderState(lastState);
+    else renderImportedBanner();
+    showToast("已载入示例测量 JSON（MEAS-DEMO-0001），可体验保存草稿、循证对话与归档");
+  } catch (_err) {
+    showToast("载入示例 JSON 失败", true);
+  }
+}
+
+async function handleImportJsonFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const analysis = await post("/api/clinic/analyze", { measurement: parsed });
+    importedMeasurement = parsed;
+    importedAnalysis = analysis;
+    assistantMessages = [];
+    renderAssistantMessages();
+    if (lastState) renderState(lastState);
+    else renderImportedBanner();
+    showToast(`已导入 ${file.name}（${analysis?.rule_result?.label || "质量门禁未通过"}）`);
+  } catch (_err) {
+    showToast("导入失败：请确认文件是有效的测量 JSON", true);
+  } finally {
+    importJsonFileEl.value = "";
+  }
+}
+
+/* ===== 报告中心、患者档案与医学知识库 ===== */
+function renderEvidenceList(items) {
+  clinicEvidenceEl.replaceChildren();
+  for (const ev of items || []) {
+    const card = document.createElement("article");
+    card.className = `evidence-card ${ev.evidence_id === focusEvidenceId ? "is-focus" : ""}`;
+    const top = document.createElement("div");
+    top.className = "list-card-tags";
+    const idTag = document.createElement("span");
+    idTag.className = "chip-tag is-teal";
+    idTag.textContent = ev.evidence_id;
+    const typeTag = document.createElement("span");
+    typeTag.className = "chip-tag";
+    typeTag.textContent = `${ev.type || ""} · ${ev.year || ""}`;
+    top.append(idTag, typeTag);
+
+    const h3 = document.createElement("h3");
+    h3.textContent = ev.title || "";
+    const p = document.createElement("p");
+    p.textContent = ev.verified_excerpt || "";
+    const pop = document.createElement("small");
+    pop.textContent = `适用边界：${ev.population || "按原研究条件"}`;
+    const link = document.createElement("a");
+    link.href = ev.source_url || "#";
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "查看原始文献来源 ↗";
+
+    card.append(top, h3, p, pop, link);
+    clinicEvidenceEl.appendChild(card);
+  }
+}
+
+function renderDraftDetail(draft) {
+  activeDraft = draft;
+  if (!draft) {
+    reportsDetailViewEl.hidden = true;
+    reportsListViewEl.hidden = false;
+    updateAssistantContext();
+    return;
+  }
+  reportsListViewEl.hidden = true;
+  reportsDetailViewEl.hidden = false;
+
+  const archived = draft.status === "archived";
+  const passed = draft.quality_gate === "passed";
+  const m = draft.measurement?.metrics || {};
+  const rule = draft.rule_result;
+
+  draftEditTitleEl.value = draft.title || "";
+  draftEditTitleEl.disabled = archived;
+
+  draftGatePillEl.className = "gate-pill";
+  if (archived) {
+    draftGatePillEl.classList.add("is-arch");
+    draftGatePillEl.textContent = `已归档 · ${draft.patient_name || draft.patient_ref || ""}`;
+  } else if (passed) {
+    draftGatePillEl.classList.add("is-pass");
+    draftGatePillEl.textContent = "草稿 · 质控通过";
+  } else {
+    draftGatePillEl.classList.add("is-block");
+    draftGatePillEl.textContent = "草稿 · 门禁阻断";
+  }
+
+  draftKpiTwEl.textContent = Number.isFinite(Number(m.t_wound_mean_c)) ? `${Number(m.t_wound_mean_c).toFixed(2)} °C` : "—";
+  draftKpiTrEl.textContent = Number.isFinite(Number(m.t_ref_far_c)) ? `${Number(m.t_ref_far_c).toFixed(2)} °C` : "—";
+  draftKpiDtEl.textContent = Number.isFinite(Number(m.delta_t_c))
+    ? fmtDelta(m.delta_t_c)
+    : Number.isFinite(Number(m.estimated_delta_t_c))
+    ? `≈${fmtDelta(m.estimated_delta_t_c)}`
+    : "—";
+  draftKpiAreaEl.textContent = Number.isFinite(Number(m.area_ratio)) ? `${(Number(m.area_ratio) * 100).toFixed(1)} %` : "—";
+
+  draftRuleCardEl.classList.toggle("is-normal", rule?.level === "normal");
+  if (rule) {
+    draftRuleTitleEl.textContent = `${rule.label}  ·  ΔT ${fmtDelta(rule.delta_t_c)}`;
+    draftRuleBadgeEl.textContent = "非确诊 · 规则独占";
+    draftGateNoteEl.textContent = `规则版本 ${rule.threshold_version || "wound-delta-v1"}；单次热像不构成感染确诊，须结合创面外观并同条件复测。`;
+  } else {
+    draftRuleTitleEl.textContent = "质量门禁未通过";
+    draftRuleBadgeEl.textContent = "禁止归档";
+    draftGateNoteEl.textContent = `阻断原因：${draft.blocked_message || "未获得有效温度矩阵或标定失效"}。请采集真实温度矩阵后另存草稿。`;
+  }
+
+  const d = draft.details || {};
+  draftSiteEl.value = d.site || "";
+  draftDurationEl.value = d.duration || "";
+  draftSymptomsEl.value = d.symptoms || "";
+  draftTreatmentEl.value = d.treatment || "";
+  draftNotesEl.value = d.notes || "";
+  for (const el of [draftSiteEl, draftDurationEl, draftSymptomsEl, draftTreatmentEl, draftNotesEl]) {
+    el.disabled = archived;
+  }
+  draftSaveDetailsBtn.disabled = archived;
+  draftArchiveBtn.disabled = archived ? false : !passed;
+  draftArchiveBtn.textContent = archived ? "查看患者档案" : "保存为患者档案";
+  draftArchiveHintEl.textContent = archived
+    ? `已归档为 ${draft.patient_name || ""}（${draft.patient_ref || ""}），当前草稿只读锁定。`
+    : "存入患者档案时自动编号（患者01、患者02…），写入只追加测量记录并生成带 SHA-256 哈希的 HTML 报告；仅质量门禁通过的草稿可归档。";
+
+  draftSupplementsListEl.replaceChildren();
+  const sups = draft.supplements || [];
+  if (sups.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "暂无补充记录。点击“打开循证对话”口述创口情况即可自动提取并确认写入。";
+    draftSupplementsListEl.appendChild(empty);
+  } else {
+    for (const item of [...sups].reverse()) {
+      const row = document.createElement("div");
+      row.className = "list-card-btn";
+      const main = document.createElement("div");
+      main.className = "list-card-main";
+      const title = document.createElement("strong");
+      title.textContent = item.text;
+      const sub = document.createElement("small");
+      const fNames = (item.fields || []).map((k) => DETAIL_LABELS[k] || k).join("、");
+      sub.textContent = `${fmtTime(item.at)}${fNames ? ` · 写入：${fNames}` : ""}`;
+      main.append(title, sub);
+      const tag = document.createElement("span");
+      tag.className = "chip-tag";
+      tag.textContent = item.source === "chat" ? "对话提取" : "手动";
+      row.append(main, tag);
+      draftSupplementsListEl.appendChild(row);
+    }
+  }
+
+  // 加载随草稿保存的对话记录
+  assistantMessages = (draft.chat || []).map((m, idx) => ({
+    id: `draft-${draft.draft_id}-${idx}`,
+    role: m.role,
+    text: m.text,
+    meta: null,
+  }));
+  pendingDetails = null;
+  renderAssistantMessages();
+  renderPendingDetails();
+  updateAssistantContext();
+}
+
+async function openDraftById(draftId) {
+  try {
+    const res = await fetch(`/api/clinic/draft?draft_id=${encodeURIComponent(draftId)}`).then((r) => r.json());
+    if (!res || !res.ok || !res.draft) {
+      showToast(res?.error?.message || "打开草稿失败", true);
+      return;
+    }
+    renderDraftDetail(res.draft);
+  } catch (_err) {
+    showToast("读取草稿详情失败", true);
+  }
+}
+
+async function selectPatient(patientRef) {
+  activePatientRef = patientRef;
+  renderPatientList((clinicData && clinicData.patients) || []);
+  patientHistoryTitleEl.textContent = `检测记录 · ${patientRef}`;
+  try {
+    const res = await fetch(`/api/clinic/patient/history?patient_ref=${encodeURIComponent(patientRef)}`).then((r) => r.json());
+    if (!res || !res.ok) return;
+    const rows = res.measurements || [];
+    patientHistoryWrapEl.replaceChildren();
+    if (rows.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty-note";
+      empty.textContent = "该档案暂无测量记录";
+      patientHistoryWrapEl.appendChild(empty);
+    } else {
+      const tbl = document.createElement("table");
+      tbl.className = "data-table";
+      const thead = document.createElement("thead");
+      const hr = document.createElement("tr");
+      for (const label of ["测量编号", "采集时间", "ΔT", "本地等级", "状态"]) {
+        const th = document.createElement("th");
+        th.textContent = label;
+        hr.appendChild(th);
+      }
+      thead.appendChild(hr);
+      const tbody = document.createElement("tbody");
+      for (const item of rows) {
+        const tr = document.createElement("tr");
+        const cells = [
+          item.measurement_id,
+          fmtTime(item.captured_at),
+          fmtDelta(item.metrics?.delta_t_c),
+          item.rule_result?.label || "—",
+          "已归档",
+        ];
+        cells.forEach((txt, idx) => {
+          const td = document.createElement("td");
+          if (idx === 4) {
+            const pill = document.createElement("span");
+            pill.className = `gate-pill ${item.rule_result?.level === "normal" ? "is-pass" : "is-warn"}`;
+            pill.textContent = txt;
+            td.appendChild(pill);
+          } else {
+            td.textContent = txt;
+          }
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      }
+      tbl.append(thead, tbody);
+      patientHistoryWrapEl.appendChild(tbl);
+    }
+
+    renderReportList(res.reports || []);
+  } catch (_err) {
+    // 忽略
+  }
+}
+
+function renderPatientList(patients) {
+  clinicPatientsEl.replaceChildren();
+  if (!patients.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "暂无患者档案。在报告中心归档任意通过质控的草稿即可自动建档（患者01）。";
+    clinicPatientsEl.appendChild(empty);
+    patientHistoryWrapEl.replaceChildren();
+    return;
+  }
+  for (const p of patients) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `list-card-btn ${p.patient_ref === activePatientRef ? "is-active" : ""}`;
+    const main = document.createElement("div");
+    main.className = "list-card-main";
+    const t = document.createElement("strong");
+    t.textContent = `${p.display_name || p.patient_ref}`;
+    const s = document.createElement("small");
+    s.textContent = `${p.patient_ref} · 建档 ${fmtTime(p.created_at)}`;
+    main.append(t, s);
+    const pill = document.createElement("span");
+    pill.className = "gate-pill is-arch";
+    pill.textContent = `${p.measurement_count || 0} 次`;
+    btn.append(main, pill);
+    btn.addEventListener("click", () => selectPatient(p.patient_ref));
+    clinicPatientsEl.appendChild(btn);
+  }
+}
+
+function renderReportList(reports) {
+  clinicReportsEl.replaceChildren();
+  if (!reports.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "暂无可追溯 HTML 报告";
+    clinicReportsEl.appendChild(empty);
+    return;
+  }
+  for (const r of reports) {
+    const link = document.createElement("a");
+    link.className = "list-card-btn";
+    link.href = `/api/clinic/report/${encodeURIComponent(r.report_id)}`;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    const main = document.createElement("div");
+    main.className = "list-card-main";
+    const t = document.createElement("strong");
+    t.textContent = r.report_id;
+    const s = document.createElement("small");
+    s.textContent = `${r.patient_ref} · ${r.measurement_id} · ${fmtTime(r.created_at)}`;
+    main.append(t, s);
+    const pill = document.createElement("span");
+    pill.className = "gate-pill is-pass";
+    pill.textContent = "打开 HTML 报告 ↗";
+    link.append(main, pill);
+    clinicReportsEl.appendChild(link);
+  }
+}
+
+async function loadClinic(notify = false) {
+  try {
+    const data = await fetch("/api/clinic/summary").then((r) => r.json());
+    if (!data || !data.ok) return;
+    clinicData = data;
+    const drafts = data.drafts || [];
+    const patients = data.patients || [];
+    const reports = data.reports || [];
+
+    navDraftsBadgeEl.textContent = String(drafts.length);
+    navPatientsBadgeEl.textContent = String(patients.length);
+    clinicPatientCountEl.textContent = `${patients.length} 位患者`;
+
+    clinicDraftsEl.replaceChildren();
+    if (drafts.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty-note";
+      empty.textContent = "报告中心暂无草稿。请在“实时筛查”采集温度帧或点击“示例 JSON”后保存草稿。";
+      clinicDraftsEl.appendChild(empty);
+    } else {
+      for (const item of drafts) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "list-card-btn";
+        const main = document.createElement("div");
+        main.className = "list-card-main";
+        const title = document.createElement("strong");
+        title.textContent = item.title;
+        const sub = document.createElement("small");
+        sub.textContent = `${item.draft_id} · ${item.measurement_id || "—"} · 更新于 ${fmtTime(item.updated_at)}`;
+        const tags = document.createElement("div");
+        tags.className = "list-card-tags";
+        if (item.rule_result) {
+          const t1 = document.createElement("span");
+          t1.className = `gate-pill ${item.rule_result.level === "normal" ? "is-pass" : "is-warn"}`;
+          t1.textContent = `${item.rule_result.label} · ΔT ${fmtDelta(item.delta_t_c)}`;
+          tags.appendChild(t1);
+        } else {
+          const t1 = document.createElement("span");
+          t1.className = "gate-pill is-block";
+          t1.textContent = "质量门禁未通过";
+          tags.appendChild(t1);
+        }
+        if (item.detail_count > 0) {
+          const t2 = document.createElement("span");
+          t2.className = "chip-tag";
+          t2.textContent = `详情 ${item.detail_count} 项`;
+          tags.appendChild(t2);
+        }
+        main.append(title, sub, tags);
+
+        const right = document.createElement("span");
+        right.className = `gate-pill ${item.status === "archived" ? "is-arch" : "is-warn"}`;
+        right.textContent = item.status === "archived" ? `已归档 · ${item.patient_name || item.patient_ref}` : "草稿 ›";
+        btn.append(main, right);
+        btn.addEventListener("click", () => openDraftById(item.draft_id));
+        clinicDraftsEl.appendChild(btn);
+      }
+    }
+
+    renderPatientList(patients);
+    if (patients.length > 0) {
+      const targetRef = patients.some((p) => p.patient_ref === activePatientRef) ? activePatientRef : patients[0].patient_ref;
+      if (activePage === "archive") {
+        await selectPatient(targetRef);
+      } else {
+        activePatientRef = targetRef;
+        renderReportList(reports);
+      }
+    } else {
+      renderReportList(reports);
+    }
+
+    renderEvidenceList(data.evidence || []);
+    if (notify) showToast("已刷新临床草稿与档案");
+  } catch (_err) {
+    if (notify) showToast("刷新临床数据失败", true);
+  }
+}
+
+/* ===== 保存草稿弹窗 ===== */
+function openSaveDraftModal() {
+  draftModalMetaEl.replaceChildren();
+  const pill = document.createElement("span");
+  pill.className = "gate-pill";
+  let defaultTitle = `创口筛查 ${new Date().toTimeString().slice(0, 5)}`;
+  if (importedMeasurement) {
+    const passed = importedAnalysis?.ok && importedAnalysis?.quality_gate === "passed";
+    pill.classList.add(passed ? "is-pass" : "is-block");
+    pill.textContent = passed ? importedAnalysis.rule_result.label : "门禁未通过";
+    const span = document.createElement("span");
+    span.textContent = `来源：导入 JSON (${importedMeasurement.measurement_id}) · ΔT ${fmtDelta(importedMeasurement.metrics?.delta_t_c)}`;
+    draftModalMetaEl.append(pill, span);
+    defaultTitle = `示例创口筛查 ${new Date().toTimeString().slice(0, 5)}`;
+  } else {
+    const hasT = Boolean(lastState?.has_temperature);
+    pill.classList.add(hasT && !lastState?.unstable && (lastState?.frame_count || 0) >= 5 ? "is-pass" : "is-block");
+    pill.textContent = hasT ? "实时温度矩阵" : "伪彩预览（门禁阻断）";
+    const span = document.createElement("span");
+    span.textContent = `来源：${lastState?.source_label || "实时画面"} · ΔT ${fmtDelta(lastState?.delta)}`;
+    draftModalMetaEl.append(pill, span);
+  }
+  draftModalTitleEl.value = defaultTitle;
+  draftModalEl.hidden = false;
+  draftModalTitleEl.focus();
+  draftModalTitleEl.select();
+}
+
+async function confirmCreateDraft() {
+  const title = (draftModalTitleEl.value || "").trim() || "未命名草稿";
+  draftModalConfirmBtn.disabled = true;
+  try {
+    const payload = importedMeasurement ? { title, measurement: importedMeasurement } : { title };
+    const res = await post("/api/clinic/draft/create", payload);
+    if (!res || !res.ok || !res.draft) {
+      showToast(res?.error?.message || "保存草稿失败", true);
+      return;
+    }
+    draftModalEl.hidden = true;
+    showToast(res.draft.quality_gate === "passed" ? "草稿已保存（质量门禁通过）" : "草稿已保存（门禁阻断，需真实温度矩阵方可归档）");
+    await loadClinic(false);
+    setActivePage("reports");
+    renderDraftDetail(res.draft);
+  } finally {
+    draftModalConfirmBtn.disabled = false;
+  }
+}
+
+async function saveDraftDetails() {
+  if (!activeDraft || activeDraft.status === "archived") return;
+  const res = await post("/api/clinic/draft/update", {
+    draft_id: activeDraft.draft_id,
+    title: draftEditTitleEl.value,
+    details: {
+      site: draftSiteEl.value,
+      duration: draftDurationEl.value,
+      symptoms: draftSymptomsEl.value,
+      treatment: draftTreatmentEl.value,
+      notes: draftNotesEl.value,
+    },
+  });
+  if (res && res.ok && res.draft) {
+    showToast("已更新草稿临床详情");
+    renderDraftDetail(res.draft);
+    await loadClinic(false);
+  } else {
+    showToast(res?.error?.message || "更新失败", true);
+  }
+}
+
+async function archiveCurrentDraft() {
+  if (!activeDraft) return;
+  if (activeDraft.status === "archived") {
+    activePatientRef = activeDraft.patient_ref || "";
+    setActivePage("archive");
+    return;
+  }
+  const res = await post("/api/clinic/draft/archive", { draft_id: activeDraft.draft_id });
+  if (res && res.ok && res.draft) {
+    showToast(`已归档为 ${res.display_name} (${res.patient_ref}) 并生成 HTML 报告`);
+    activePatientRef = res.patient_ref;
+    renderDraftDetail(res.draft);
+    await loadClinic(false);
+  } else {
+    showToast(res?.error?.message || "归档失败", true);
+  }
+}
+
+/* ===== 循证对话医师助手 ===== */
+function setAssistantOpen(open) {
+  assistantDrawerEl.hidden = !open;
+  assistantToggleBtn.classList.toggle("is-on", open);
+  if (open) {
+    loadAssistantMeta();
+    updateAssistantContext();
+    setTimeout(() => assistantInputEl.focus(), 40);
+  }
+  setTimeout(paint, 40);
+}
+
+function showAssistantSubView(mode) {
+  assistantChatViewEl.hidden = mode !== "chat";
+  assistantRulesViewEl.hidden = mode !== "rules";
+  assistantCfgViewEl.hidden = mode !== "cfg";
+}
+
+function updateAssistantContext() {
+  const inDraft = activePage === "reports" && Boolean(activeDraft);
+  if (inDraft) {
+    assistantCtxDraftEl.hidden = false;
+    assistantCtxDraftEl.textContent = `草稿：${activeDraft.title}`;
+    assistantCtxRuleEl.className = "gate-pill";
+    if (activeDraft.rule_result) {
+      assistantCtxRuleEl.classList.add(activeDraft.rule_result.level === "normal" ? "is-pass" : "is-warn");
+      assistantCtxRuleEl.textContent = activeDraft.rule_result.label;
+    } else {
+      assistantCtxRuleEl.classList.add("is-block");
+      assistantCtxRuleEl.textContent = "门禁未通过";
+    }
+    assistantCtxDeltaEl.textContent = `ΔT ${fmtDelta(activeDraft.delta_t_c)}`;
+  } else if (importedMeasurement) {
+    assistantCtxDraftEl.hidden = true;
+    assistantCtxRuleEl.className = `gate-pill ${importedAnalysis?.ok ? "is-warn" : "is-block"}`;
+    assistantCtxRuleEl.textContent = importedAnalysis?.rule_result?.label || "门禁未通过";
+    assistantCtxDeltaEl.textContent = `ΔT ${fmtDelta(importedMeasurement.metrics?.delta_t_c)}`;
+  } else {
+    assistantCtxDraftEl.hidden = true;
+    assistantCtxRuleEl.className = `gate-pill ${lastState?.has_temperature ? "is-pass" : "is-block"}`;
+    assistantCtxRuleEl.textContent = lastState?.has_temperature ? "实时温度矩阵" : "无温度矩阵";
+    assistantCtxDeltaEl.textContent = `ΔT ${fmtDelta(lastState?.delta)}`;
+  }
+
+  const usingModel = Boolean(assistantConfig?.enabled && assistantConfig?.has_api_key);
+  const modeBase = usingModel ? `模型增强 (${assistantConfig.model})` : "离线规则引擎";
+  assistantModeSubEl.textContent = inDraft
+    ? `${modeBase} · ${activeDraft.status === "archived" ? "草稿只读" : "可提取草稿详情"}`
+    : `${modeBase} · 只解释不确诊`;
+}
+
+function renderAssistantMessages() {
+  assistantMessagesEl.replaceChildren();
+  if (assistantMessages.length === 0) {
+    const box = document.createElement("div");
+    box.className = "chat-welcome";
+    const inDraft = activePage === "reports" && Boolean(activeDraft);
+    box.textContent = inDraft
+      ? activeDraft.status === "archived"
+        ? "这份草稿已归档（只读），可继续围绕当前 ΔT 询问复测、证据与就医指征。"
+        : "草稿模式：你可以直接描述创口情况（例如“右手背外伤4天，边缘轻度红肿，正在用碘伏换药”），助手会自动提取结构化字段供你一键写入草稿。"
+      : "围绕当前测量数值提问：例如解读 ΔT、是否需要复测、证据与局限或何时就医。风险等级由本地规则独占，回答不构成确诊。";
+    assistantMessagesEl.appendChild(box);
+    return;
+  }
+
+  for (const msg of assistantMessages) {
+    const wrap = document.createElement("div");
+    wrap.className = `chat-bubble-wrap ${msg.role === "user" ? "is-user" : ""}`;
+    const role = document.createElement("span");
+    role.className = "chat-role";
+    role.textContent = msg.role === "user" ? "你" : "医师助手";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.textContent = msg.text;
+    wrap.append(role, bubble);
+
+    if (msg.role === "assistant" && msg.meta) {
+      const metaRow = document.createElement("div");
+      metaRow.className = "chat-meta";
+      if (msg.meta.rule) {
+        const rBadge = document.createElement("span");
+        rBadge.className = `gate-pill ${msg.meta.rule.level === "normal" ? "is-pass" : msg.meta.rule.level === "blocked" ? "is-block" : "is-warn"}`;
+        rBadge.textContent = `本地规则：${msg.meta.rule.label}`;
+        metaRow.appendChild(rBadge);
+      }
+      const sBadge = document.createElement("span");
+      sBadge.className = "chip-tag";
+      sBadge.textContent = msg.meta.modelUsed ? `模型 · ${msg.meta.model}` : REASON_LABEL[msg.meta.reason] || "本地规则模板";
+      metaRow.appendChild(sBadge);
+      wrap.appendChild(metaRow);
+
+      if (msg.meta.violations && msg.meta.violations.length > 0) {
+        const vBox = document.createElement("div");
+        vBox.className = "chat-violation";
+        vBox.textContent = `已拦截模型违规表述并回退本地规则：${msg.meta.violations.map((v) => v.message).join("；")}`;
+        wrap.appendChild(vBox);
+      }
+    }
+    assistantMessagesEl.appendChild(wrap);
+  }
+  assistantMessagesEl.scrollTop = assistantMessagesEl.scrollHeight;
+}
+
+function renderPendingDetails() {
+  const fields = pendingDetails?.fields || {};
+  const entries = Object.entries(fields);
+  if (entries.length === 0 || !activeDraft || activeDraft.status === "archived") {
+    assistantPendingCardEl.hidden = true;
+    return;
+  }
+  assistantPendingCardEl.hidden = false;
+  assistantPendingFieldsEl.replaceChildren();
+  for (const [k, v] of entries) {
+    const div = document.createElement("div");
+    div.textContent = `${DETAIL_LABELS[k] || k}：${v}`;
+    assistantPendingFieldsEl.appendChild(div);
+  }
+}
+
+async function loadAssistantMeta() {
+  try {
+    const res = await fetch("/api/assistant/rules").then((r) => r.json());
+    if (!res || !res.ok) return;
+    assistantRules = res.rules;
+    assistantConfig = res.config;
+
+    assistantQuickEl.replaceChildren();
+    for (const q of assistantRules.quick_prompts || []) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "quick-chip";
+      btn.textContent = q;
+      btn.addEventListener("click", () => sendAssistantQuestion(q));
+      assistantQuickEl.appendChild(btn);
+    }
+
+    assistantRulesBodyEl.replaceChildren();
+    for (const sec of assistantRules.sections || []) {
+      const box = document.createElement("div");
+      box.className = "rule-sec";
+      const h4 = document.createElement("h4");
+      h4.textContent = sec.title || "";
+      const ul = document.createElement("ul");
+      for (const item of sec.items || []) {
+        const li = document.createElement("li");
+        li.textContent = item;
+        ul.appendChild(li);
+      }
+      box.append(h4, ul);
+      assistantRulesBodyEl.appendChild(box);
+    }
+
+    llmBaseUrlEl.value = assistantConfig.base_url || "https://api.deepseek.com/v1";
+    llmModelEl.value = assistantConfig.model || "deepseek-chat";
+    llmEnabledEl.checked = Boolean(assistantConfig.enabled || !assistantConfig.has_api_key);
+    llmKeyStatusEl.textContent = assistantConfig.has_api_key ? `已配置 (${assistantConfig.api_key_preview})` : "未配置 · 离线模式";
+    updateAssistantContext();
+  } catch (_err) {
+    // 忽略
+  }
+}
+
+async function sendAssistantQuestion(rawText) {
+  const q = String(rawText ?? assistantInputEl.value).trim();
+  if (!q || assistantBusy) return;
+  assistantBusy = true;
+  assistantSendBtn.disabled = true;
+  assistantInputEl.value = "";
+  assistantMessages.push({ id: `u-${Date.now()}`, role: "user", text: q });
+  renderAssistantMessages();
+
+  const inDraft = activePage === "reports" && Boolean(activeDraft);
+  const payload = {
+    question: q,
+    history: assistantMessages.slice(-8).map((m) => ({ role: m.role, text: m.text })),
+  };
+  if (inDraft) {
+    payload.draft_id = activeDraft.draft_id;
+  } else if (importedMeasurement) {
+    payload.measurement = importedMeasurement;
+  }
+
+  try {
+    const res = await post("/api/assistant/chat", payload);
+    if (res && res.ok) {
+      assistantMessages.push({
+        id: `a-${Date.now()}`,
+        role: "assistant",
+        text: res.answer || "",
+        meta: res.meta || null,
+      });
+      if (inDraft && activeDraft.status !== "archived") {
+        // 同步保存本草稿的对话记录
+        await post("/api/clinic/draft/update", {
+          draft_id: activeDraft.draft_id,
+          chat: assistantMessages.map((m) => ({ role: m.role, text: m.text })),
+        });
+        if (res.extracted_details && Object.keys(res.extracted_details).length > 0) {
+          pendingDetails = { fields: res.extracted_details, sourceText: q };
+          renderPendingDetails();
+        }
+      }
+    } else {
+      assistantMessages.push({
+        id: `e-${Date.now()}`,
+        role: "assistant",
+        text: res?.error?.message || "请求失败，请稍后重试。",
+      });
+    }
+    renderAssistantMessages();
+  } catch (_err) {
+    assistantMessages.push({ id: `e-${Date.now()}`, role: "assistant", text: "无法连接本地服务。" });
+    renderAssistantMessages();
+  } finally {
+    assistantBusy = false;
+    assistantSendBtn.disabled = false;
+    assistantInputEl.focus();
+  }
+}
+
+async function applyPendingDetails() {
+  if (!pendingDetails || !activeDraft || activeDraft.status === "archived") return;
+  const fields = pendingDetails.fields || {};
+  const res = await post("/api/clinic/draft/update", {
+    draft_id: activeDraft.draft_id,
+    details: fields,
+    supplements: [
+      {
+        text: pendingDetails.sourceText || Object.values(fields).join("；"),
+        source: "chat",
+        fields: Object.keys(fields),
+      },
+    ],
+  });
+  pendingDetails = null;
+  renderPendingDetails();
+  if (res && res.ok && res.draft) {
+    showToast("已将对话提取的创口详情写入草稿");
+    renderDraftDetail(res.draft);
+    await loadClinic(false);
+  }
+}
+
+async function saveLlmConfig(clearKey = false) {
+  const payload = clearKey
+    ? { clear_key: true }
+    : {
+        base_url: llmBaseUrlEl.value,
+        model: llmModelEl.value,
+        api_key: llmApiKeyEl.value,
+        enabled: llmEnabledEl.checked,
+      };
+  const res = await post("/api/assistant/config", payload);
+  if (res && res.ok) {
+    llmApiKeyEl.value = "";
+    assistantConfig = res.config;
+    llmKeyStatusEl.textContent = assistantConfig.has_api_key ? `已配置 (${assistantConfig.api_key_preview})` : "未配置 · 离线模式";
+    updateAssistantContext();
+    showToast(clearKey ? "已清除本机 API Key，切回离线规则模式" : "已保存大模型配置（仅存于本机）");
+  }
+}
+
+/* ===== 定时状态轮询 ===== */
 async function tick() {
   const ver = stateVersion;
   try {
@@ -1247,7 +2161,11 @@ async function tick() {
   }
 }
 
-/* ===== 绑定全部按钮与双向同步事件 ===== */
+/* ===== 绑定全部事件 ===== */
+for (const btn of navBtns) {
+  btn.addEventListener("click", () => setActivePage(btn.dataset.page));
+}
+
 for (const btn of distBtns) {
   btn.addEventListener("click", async () => {
     const mm = Number(btn.dataset.mm);
@@ -1278,6 +2196,8 @@ document.querySelector("#refresh").addEventListener("click", () => loadDevices(t
 document.querySelector("#start").addEventListener("click", async () => {
   activeReplayPath = "";
   pinnedSpot = null;
+  importedMeasurement = null;
+  importedAnalysis = null;
   await sendAction("/api/distance", { mm: Number(distanceEl.value) });
   await sendAction("/api/emissivity", { value: Number(emissivityEl.value) });
   const res = await sendAction("/api/start", { source: sourceEl.value });
@@ -1289,6 +2209,35 @@ document.querySelector("#stop").addEventListener("click", async () => {
   showToast("已停止采集");
 });
 
+themeToggleBtn.addEventListener("click", () => {
+  const cur = document.documentElement.dataset.theme;
+  applyTheme(cur === "dark" ? "light" : "dark");
+});
+
+topbarSaveDraftBtn.addEventListener("click", openSaveDraftModal);
+reportsNewDraftBtn.addEventListener("click", openSaveDraftModal);
+importedSaveDraftBtn.addEventListener("click", openSaveDraftModal);
+importedClearBtn.addEventListener("click", () => {
+  importedMeasurement = null;
+  importedAnalysis = null;
+  if (lastState) renderState(lastState);
+  showToast("已切回实时热像测量");
+});
+loadExampleBtn.addEventListener("click", loadExampleMeasurement);
+importJsonBtn.addEventListener("click", () => importJsonFileEl.click());
+importJsonFileEl.addEventListener("change", (event) => handleImportJsonFile(event.target.files?.[0]));
+
+draftModalCancelBtn.addEventListener("click", () => {
+  draftModalEl.hidden = true;
+});
+draftModalConfirmBtn.addEventListener("click", confirmCreateDraft);
+draftModalTitleEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") confirmCreateDraft();
+});
+draftModalEl.addEventListener("mousedown", (event) => {
+  if (event.target === draftModalEl) draftModalEl.hidden = true;
+});
+
 for (const btn of viewBtns) {
   btn.addEventListener("click", async () => {
     viewMode = btn.dataset.view;
@@ -1298,9 +2247,7 @@ for (const btn of viewBtns) {
   });
 }
 
-weightEl.addEventListener("change", (event) => {
-  sendAction("/api/weight", { model: event.target.value });
-});
+weightEl.addEventListener("change", (event) => sendAction("/api/weight", { model: event.target.value }));
 
 resumeLiveBtn.addEventListener("click", async () => {
   if (lastState?.source === "replay") {
@@ -1315,10 +2262,7 @@ resumeLiveBtn.addEventListener("click", async () => {
   }
 });
 
-autoBtn.addEventListener("click", async () => {
-  await sendAction("/api/auto", { enabled: !autoFollow });
-});
-
+autoBtn.addEventListener("click", () => sendAction("/api/auto", { enabled: !autoFollow }));
 modeWoundBtn.addEventListener("click", () => setMode("wound"));
 modeRefBtn.addEventListener("click", () => setMode("ref"));
 
@@ -1376,272 +2320,13 @@ regionsEl.addEventListener("click", async (event) => {
   await sendAction("/api/region", { index: Number(btn.dataset.idx) });
 });
 
-for (const btn of tabBtns) {
-  btn.addEventListener("click", () => setActiveTab(btn.dataset.tab));
+for (const btn of document.querySelectorAll(".ev-jump-btn")) {
+  btn.addEventListener("click", () => jumpToEvidence(btn.dataset.ev));
 }
 
-/* ===== 设备编码探测与临床草稿/档案工作流（整合自 dsh-wound-clinic v0.7.2） ===== */
-async function runProbe() {
-  if (!probeBtn || !probeOutputEl) return;
-  probeBtn.disabled = true;
-  probeOutputEl.hidden = false;
-  probeOutputEl.textContent = "正在探测接入摄像头格式、视频编码与 16bit 温度流...";
-  try {
-    const res = await fetch("/api/probe").then((r) => r.json());
-    if (!res || !res.ok) {
-      probeOutputEl.textContent = "探测失败";
-      return;
-    }
-    const lines = [res.summary || "探测完成"];
-    for (const item of res.dshow_options || []) {
-      lines.push(`\n[DirectShow] ${item.label}`);
-      if (item.options && item.options.length) {
-        for (const opt of item.options.slice(0, 8)) lines.push(`  ${opt}`);
-      } else {
-        lines.push("  （未列出扩展格式）");
-      }
-    }
-    for (const p of res.opencv_probes || []) {
-      if (!p.opened && p.mode_requested !== "default") continue;
-      if (p.read_frames > 0) {
-        lines.push(
-          `[OpenCV cam:${p.camera} ${p.backend}/${p.mode_requested}] ${p.width_actual}×${p.height_actual} fourcc=${p.fourcc_actual} dtype=${p.dtype} range=[${p.raw_min}, ${p.raw_max}]`
-        );
-      } else if (p.opened) {
-        lines.push(`[OpenCV cam:${p.camera} ${p.backend}/${p.mode_requested}] 打开但无帧`);
-      }
-    }
-    probeOutputEl.textContent = lines.join("\n");
-  } catch (_err) {
-    probeOutputEl.textContent = "探测请求失败，请检查本机服务。";
-  } finally {
-    probeBtn.disabled = false;
-  }
-}
-
-function renderDraftEditor(draft) {
-  if (!draft) {
-    draftEditorEl.hidden = true;
-    return;
-  }
-  draftEditorEl.hidden = false;
-  const archived = draft.status === "archived";
-  const passed = draft.quality_gate === "passed";
-  draftEditorTitleEl.textContent = draft.title || "草稿详情";
-  draftGatePillEl.classList.remove("is-pass", "is-block", "is-arch");
-  if (archived) {
-    draftGatePillEl.classList.add("is-arch");
-    draftGatePillEl.textContent = `已归档 · ${draft.patient_name || draft.patient_ref || ""}`;
-  } else if (passed) {
-    draftGatePillEl.classList.add("is-pass");
-    draftGatePillEl.textContent = draft.rule_result?.label || "质控通过";
-  } else {
-    draftGatePillEl.classList.add("is-block");
-    draftGatePillEl.textContent = "门禁未通过";
-  }
-
-  if (!passed && draft.blocked_message) {
-    draftGateNoteEl.hidden = false;
-    draftGateNoteEl.textContent = `质控阻断：${draft.blocked_message}`;
-  } else {
-    draftGateNoteEl.hidden = true;
-  }
-
-  const d = draft.details || {};
-  draftSiteEl.value = d.site || "";
-  draftDurationEl.value = d.duration || "";
-  draftSymptomsEl.value = d.symptoms || "";
-  draftTreatmentEl.value = d.treatment || "";
-  draftNotesEl.value = d.notes || "";
-  for (const el of [draftSiteEl, draftDurationEl, draftSymptomsEl, draftTreatmentEl, draftNotesEl]) {
-    el.disabled = archived;
-  }
-  draftSaveDetailsBtn.disabled = archived;
-  draftArchiveBtn.disabled = archived || !passed;
-}
-
-async function loadClinic(notify = false) {
-  try {
-    const data = await fetch("/api/clinic/summary").then((r) => r.json());
-    if (!data || !data.ok) return;
-    clinicData = data;
-    const drafts = data.drafts || [];
-    const patients = data.patients || [];
-    const reports = data.reports || [];
-    const evidence = data.evidence || [];
-
-    clinicCountEl.textContent = String(drafts.length);
-    clinicPatientCountEl.textContent = `${patients.length} 位`;
-
-    clinicDraftsEl.replaceChildren();
-    if (drafts.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "empty-note";
-      empty.textContent = "暂无临床草稿。启动热像或合成温度源后点击“存为草稿”。";
-      clinicDraftsEl.appendChild(empty);
-      activeDraftId = "";
-      renderDraftEditor(null);
-    } else {
-      for (const item of drafts) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = `clinic-item ${item.draft_id === activeDraftId ? "is-active" : ""}`;
-        const meta = document.createElement("div");
-        meta.className = "clinic-item-meta";
-        const title = document.createElement("span");
-        title.textContent = item.title;
-        const sub = document.createElement("small");
-        const dtStr =
-          item.delta_t_c !== null && item.delta_t_c !== undefined
-            ? `ΔT ${item.delta_t_c >= 0 ? "+" : ""}${Number(item.delta_t_c).toFixed(2)}°C`
-            : item.estimated_delta_t_c !== null && item.estimated_delta_t_c !== undefined
-            ? `伪彩反演 ≈${Number(item.estimated_delta_t_c).toFixed(2)}°C`
-            : "无温度矩阵";
-        sub.textContent = `${dtStr} · 详情 ${item.detail_count || 0} 项 · ${(item.updated_at || "").slice(5, 16).replace("T", " ")}`;
-        meta.append(title, sub);
-
-        const pill = document.createElement("span");
-        pill.className = "gate-pill";
-        if (item.status === "archived") {
-          pill.classList.add("is-arch");
-          pill.textContent = item.patient_name || "已归档";
-        } else if (item.quality_gate === "passed") {
-          pill.classList.add("is-pass");
-          pill.textContent = item.rule_result?.level || "通过";
-        } else {
-          pill.classList.add("is-block");
-          pill.textContent = "阻断";
-        }
-        btn.append(meta, pill);
-        btn.addEventListener("click", () => {
-          activeDraftId = item.draft_id;
-          renderDraftEditor(item);
-          loadClinic(false);
-        });
-        clinicDraftsEl.appendChild(btn);
-      }
-      const selected = drafts.find((d) => d.draft_id === activeDraftId) || drafts[0];
-      activeDraftId = selected.draft_id;
-      renderDraftEditor(selected);
-    }
-
-    clinicPatientsEl.replaceChildren();
-    if (patients.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "empty-note";
-      empty.textContent = "暂无已归档患者档案";
-      clinicPatientsEl.appendChild(empty);
-    } else {
-      for (const p of patients) {
-        const row = document.createElement("div");
-        row.className = "clinic-item";
-        const meta = document.createElement("div");
-        meta.className = "clinic-item-meta";
-        const t = document.createElement("span");
-        t.textContent = `${p.display_name || p.patient_ref} (${p.patient_ref})`;
-        const s = document.createElement("small");
-        s.textContent = `建档 ${(p.created_at || "").slice(0, 16).replace("T", " ")}`;
-        meta.append(t, s);
-        const tag = document.createElement("span");
-        tag.className = "gate-pill is-arch";
-        tag.textContent = `${p.measurement_count || 0} 次测量`;
-        row.append(meta, tag);
-        clinicPatientsEl.appendChild(row);
-      }
-    }
-
-    clinicReportsEl.replaceChildren();
-    for (const r of reports.slice(0, 10)) {
-      const link = document.createElement("a");
-      link.className = "clinic-item";
-      link.href = `/api/clinic/report/${encodeURIComponent(r.report_id)}`;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      const meta = document.createElement("div");
-      meta.className = "clinic-item-meta";
-      const t = document.createElement("span");
-      t.textContent = `HTML 报告 · ${r.report_id}`;
-      const s = document.createElement("small");
-      s.textContent = `${r.patient_ref} · ${(r.created_at || "").slice(0, 16).replace("T", " ")}`;
-      meta.append(t, s);
-      const tag = document.createElement("span");
-      tag.className = "gate-pill is-pass";
-      tag.textContent = "打开报告";
-      link.append(meta, tag);
-      clinicReportsEl.appendChild(link);
-    }
-
-    clinicEvidenceEl.replaceChildren();
-    for (const ev of evidence) {
-      const box = document.createElement("div");
-      box.className = "evidence-item";
-      const head = document.createElement("div");
-      const idEl = document.createElement("strong");
-      idEl.textContent = ev.evidence_id;
-      head.append(idEl, document.createTextNode(`${ev.title} (${ev.year})`));
-      const p = document.createElement("p");
-      p.textContent = ev.verified_excerpt || "";
-      box.append(head, p);
-      clinicEvidenceEl.appendChild(box);
-    }
-
-    if (notify) showToast("已刷新临床草稿与档案");
-  } catch (_err) {
-    if (notify) showToast("刷新临床档案失败", true);
-  }
-}
-
-async function createClinicDraft() {
-  const title = (draftTitleEl.value || "").trim();
-  const res = await post("/api/clinic/draft/create", { title });
-  if (res && res.ok && res.draft) {
-    draftTitleEl.value = "";
-    activeDraftId = res.draft.draft_id;
-    const passed = res.draft.quality_gate === "passed";
-    showToast(passed ? "已保存草稿（质量门禁通过）" : "已保存草稿（无真实温度矩阵，门禁阻断归档）");
-    await loadClinic(false);
-  } else {
-    showToast(res?.error?.message || res?.error || "保存草稿失败", true);
-  }
-}
-
-async function saveDraftDetails() {
-  if (!activeDraftId) return;
-  const res = await post("/api/clinic/draft/update", {
-    draft_id: activeDraftId,
-    details: {
-      site: draftSiteEl.value,
-      duration: draftDurationEl.value,
-      symptoms: draftSymptomsEl.value,
-      treatment: draftTreatmentEl.value,
-      notes: draftNotesEl.value,
-    },
-  });
-  if (res && res.ok) {
-    showToast("已更新草稿临床详情");
-    await loadClinic(false);
-  } else {
-    showToast(res?.error?.message || "更新草稿详情失败", true);
-  }
-}
-
-async function archiveActiveDraft() {
-  if (!activeDraftId) return;
-  const res = await post("/api/clinic/draft/archive", { draft_id: activeDraftId });
-  if (res && res.ok) {
-    showToast(`已归档为 ${res.display_name} (${res.patient_ref}) 并生成 HTML 报告`);
-    await loadClinic(false);
-  } else {
-    showToast(res?.error?.message || "归档失败", true);
-  }
-}
-
+probeBtn.addEventListener("click", runProbe);
 document.querySelector("#refresh-records").addEventListener("click", () => loadRecords(true));
 document.querySelector("#refresh-clinic").addEventListener("click", () => loadClinic(true));
-probeBtn.addEventListener("click", runProbe);
-saveDraftBtn.addEventListener("click", createClinicDraft);
-draftSaveDetailsBtn.addEventListener("click", saveDraftDetails);
-draftArchiveBtn.addEventListener("click", archiveActiveDraft);
 document.querySelector("#copy-md").addEventListener("click", copyMarkdownTable);
 document.querySelector("#export-csv").addEventListener("click", () => {
   const link = document.createElement("a");
@@ -1653,15 +2338,53 @@ document.querySelector("#export-csv").addEventListener("click", () => {
   showToast("已开始下载 CSV 归档记录");
 });
 
+draftBackBtn.addEventListener("click", () => renderDraftDetail(null));
+draftSaveDetailsBtn.addEventListener("click", saveDraftDetails);
+draftArchiveBtn.addEventListener("click", archiveCurrentDraft);
+draftOpenChatBtn.addEventListener("click", () => setAssistantOpen(true));
+
+assistantToggleBtn.addEventListener("click", () => setAssistantOpen(assistantDrawerEl.hidden));
+assistantCloseBtn.addEventListener("click", () => setAssistantOpen(false));
+assistantRulesBtn.addEventListener("click", () => showAssistantSubView(assistantRulesViewEl.hidden ? "rules" : "chat"));
+assistantCfgBtn.addEventListener("click", () => showAssistantSubView(assistantCfgViewEl.hidden ? "cfg" : "chat"));
+assistantRulesBackBtn.addEventListener("click", () => showAssistantSubView("chat"));
+assistantCfgBackBtn.addEventListener("click", () => showAssistantSubView("chat"));
+assistantSendBtn.addEventListener("click", () => sendAssistantQuestion());
+assistantInputEl.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    sendAssistantQuestion();
+  }
+});
+assistantApplyPendingBtn.addEventListener("click", applyPendingDetails);
+assistantDismissPendingBtn.addEventListener("click", () => {
+  pendingDetails = null;
+  renderPendingDetails();
+});
+llmSaveBtn.addEventListener("click", () => saveLlmConfig(false));
+llmClearKeyBtn.addEventListener("click", () => saveLlmConfig(true));
+
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey) return;
-  if (event.key === "Escape" && pinnedSpot) {
-    pinnedSpot = null;
-    paint();
-    return;
+  if (event.key === "Escape") {
+    if (!draftModalEl.hidden) {
+      draftModalEl.hidden = true;
+      return;
+    }
+    if (!assistantDrawerEl.hidden) {
+      setAssistantOpen(false);
+      return;
+    }
+    if (pinnedSpot) {
+      pinnedSpot = null;
+      paint();
+      return;
+    }
   }
   const tag = document.activeElement?.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if (activePage !== "screen") return;
   const key = event.key.toLowerCase();
   if (key === "1") setMode("wound");
   else if (key === "2") setMode("ref");
@@ -1671,10 +2394,13 @@ document.addEventListener("keydown", (event) => {
   else if (key === "s" && !saveBtn.disabled) saveBtn.click();
 });
 
+initTheme();
 setMode("wound");
 syncDistPresets(300);
 loadDevices(false);
 loadRecords(false);
 loadClinic(false);
+loadAssistantMeta();
+renderAssistantMessages();
 tick();
 setInterval(paint, 400);

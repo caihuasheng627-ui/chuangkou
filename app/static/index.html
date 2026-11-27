@@ -1,287 +1,548 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>创口温差初筛</title>
+  <title>创口温差初筛工作站</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="7.5" fill="none" stroke="#ffb020" stroke-width="1.8"/>
-        <circle cx="12" cy="12" r="2.6" fill="#ff6347"/>
-        <path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="#6bc2ff" stroke-width="1.8" stroke-linecap="round"/>
-      </svg>
-      <div>
-        <h1>创口温差初筛</h1>
+      <div class="brand-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <circle cx="12" cy="12" r="2.6" fill="#ff7849"/>
+          <path d="M12 2.5v3.5M12 18v3.5M2.5 12h3.5M18 12h3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="brand-meta">
+        <h1>创口温差初筛工作站</h1>
         <span id="conn-badge" class="conn-badge">待机</span>
       </div>
     </div>
 
-    <div class="calib-bar" aria-label="支架标定参数">
-      <div class="preset-group" title="立柱高度刻度（推荐 300 mm 锁紧测量）">
-        <span class="group-label">立柱</span>
-        <button type="button" class="dist-btn" data-mm="250">250</button>
-        <button type="button" class="dist-btn is-on" data-mm="300">300★</button>
-        <button type="button" class="dist-btn" data-mm="400">400</button>
-        <label class="inline-num">
-          <input id="distance" type="number" min="250" max="400" step="10" value="300" aria-label="工作距离毫米">
-          <span>mm</span>
+    <div class="topbar-controls">
+      <div class="calib-bar" aria-label="支架标定参数">
+        <div class="preset-group" title="立柱高度刻度（推荐 300 mm 锁紧测量）">
+          <span class="group-label">立柱</span>
+          <button type="button" class="dist-btn" data-mm="250">250</button>
+          <button type="button" class="dist-btn is-on" data-mm="300">300★</button>
+          <button type="button" class="dist-btn" data-mm="400">400</button>
+          <label class="inline-num">
+            <input id="distance" type="number" min="250" max="400" step="10" value="300" aria-label="工作距离毫米">
+            <span>mm</span>
+          </label>
+        </div>
+        <label class="inline-num eps-box" title="人体皮肤发射率（默认 0.98）">
+          <span>ε</span>
+          <input id="emissivity" type="number" min="0.50" max="1.00" step="0.01" value="0.98" aria-label="发射率">
         </label>
       </div>
-      <label class="inline-num eps-box" title="人体皮肤发射率（默认 0.98）">
-        <span>ε</span>
-        <input id="emissivity" type="number" min="0.50" max="1.00" step="0.01" value="0.98" aria-label="发射率">
-      </label>
+
+      <div class="source-bar">
+        <label class="select-pill">
+          <span>来源</span>
+          <select id="source" aria-label="信号来源"></select>
+        </label>
+        <button id="refresh" type="button" class="icon-btn" title="刷新已接入摄像头列表">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.6"/><path d="M13.6 2.2v3.2H10.4"/></svg>
+          刷新
+        </button>
+        <button id="start" class="btn-primary" type="button">开始</button>
+        <button id="stop" type="button" title="停止当前信号流">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg>
+          停止
+        </button>
+      </div>
     </div>
 
-    <div class="source-bar">
-      <label class="select-pill">
-        <span>来源</span>
-        <select id="source" aria-label="信号来源"></select>
-      </label>
-      <button id="refresh" type="button" class="icon-btn" title="刷新已接入摄像头列表">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.6"/><path d="M13.6 2.2v3.2H10.4"/></svg>
-        刷新
+    <div class="topbar-actions">
+      <button id="topbar-save-draft" type="button" class="btn-teal-soft" title="将当前测量或导入数据存为报告中心草稿">
+        保存草稿
       </button>
-      <button id="start" class="btn-primary" type="button">开始</button>
-      <button id="stop" type="button" title="停止当前信号流">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg>
-        停止
+      <button id="theme-toggle" type="button" class="icon-btn" title="切换医疗亮色 / 暗色实验室主题">
+        <span id="theme-label">暗色</span>
+      </button>
+      <button id="assistant-toggle" type="button" class="btn-teal" title="展开或收起右侧循证对话医师助手">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-12.3 7.6L3 21l1.9-5.7A8.5 8.5 0 1 1 21 11.5z"/><path d="M8 11h8M8 15h5"/></svg>
+        循证对话
       </button>
     </div>
   </header>
 
-  <main class="workspace">
-    <section class="stage">
-      <div class="stage-top">
-        <div id="view-tabs" class="segmented" role="tablist" aria-label="热像视图模式">
-          <button type="button" class="seg-btn is-on" data-view="original">原图</button>
-          <button type="button" class="seg-btn" data-view="removed">去背景</button>
-          <button type="button" class="seg-btn" data-view="compare">前后对比</button>
-          <button type="button" class="seg-btn" data-view="isotherm">等温差线 ΔT</button>
-        </div>
-
-        <div class="stage-top-right">
-          <label class="select-pill compact" id="weight-wrap">
-            <span>权重</span>
-            <select id="weight" aria-label="分割模型权重">
-              <option value="thermal" selected>热像伪彩分割 (推荐)</option>
-              <option value="u2netp">U2-Net 小</option>
-              <option value="u2net">U2-Net 标准</option>
-              <option value="human">人体分割</option>
-            </select>
-          </label>
-          <div id="mode-banner" class="mode-banner" hidden>
-            <span id="mode-banner-text">已锁定</span>
-            <button id="resume-live" type="button" class="mini-btn">返回实时</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="stage-row">
-        <div class="scale" id="scale" aria-label="温度色标尺">
-          <span id="scale-top">40°C</span>
-          <div class="scale-track-wrap">
-            <div class="scale-bar" id="scale-bar"></div>
-            <div class="scale-ticks" id="scale-ticks">
-              <span>36</span>
-              <span>32</span>
-            </div>
-            <i id="scale-wound" class="scale-pin pin-wound" hidden title="创口均值位置"></i>
-            <i id="scale-ref" class="scale-pin pin-ref" hidden title="对照均值位置"></i>
-          </div>
-          <span id="scale-bottom">28°C</span>
-        </div>
-
-        <div class="viewport" id="viewport">
-          <img id="frame" alt="实时画面" src="/stream.mjpg">
-          <canvas id="overlay"></canvas>
-          <div id="probe" class="float-chip chip-probe" hidden>—</div>
-          <div id="pose-chip" class="float-chip chip-pose" hidden>—</div>
-          <div id="view-hint" class="float-chip chip-hint" hidden>—</div>
-          <div id="toast" class="toast" hidden></div>
-        </div>
-      </div>
-
-      <div class="action-bar">
-        <div class="action-group">
-          <button id="auto" class="tool-btn is-on" type="button" title="快捷键 A：切换自动热区追踪与手动框选">
-            自动框热区 <kbd>A</kbd>
-          </button>
-          <button id="mode-wound" class="tool-btn" type="button" title="快捷键 1：在空白处拖拽新建创口框（也可直接拖动已有橙框微调）">
-            <span class="dot dot-wound"></span>创口框 <kbd>1</kbd>
-          </button>
-          <button id="mode-ref" class="tool-btn" type="button" title="快捷键 2：在空白处拖拽新建对照框（也可直接拖动已有蓝框微调）">
-            <span class="dot dot-ref"></span>对照框 <kbd>2</kbd>
-          </button>
-          <button id="align-pose" class="tool-btn" type="button" title="快捷键 P：按手掌质心与主轴方向自动对齐创口框和对照框">
-            手姿对齐 <kbd>P</kbd>
-          </button>
-        </div>
-
-        <div class="action-group action-right">
-          <button id="measure" class="step-btn" type="button" title="快捷键 M：连续采集 10 帧稳态温度矩阵并锁定">
-            <span class="step-num">1</span>
-            <span id="measure-label">稳定采 10 帧</span>
-            <kbd>M</kbd>
-          </button>
-          <button id="lab-toggle" class="tool-btn" type="button" title="展开或折叠实验分组与 NTC 标定输入">
-            验收标签
-          </button>
-          <div id="lab-drawer" class="lab-drawer" hidden>
-            <select id="exp-group" aria-label="验收实验分组">
-              <option value="日常初筛">日常初筛</option>
-              <option value="空手基线">空手基线 (档0)</option>
-              <option value="模拟偏热">模拟偏热 (档1)</option>
-              <option value="模拟明显温升">模拟明显温升 (档2)</option>
-              <option value="反例">手持/干扰反例</option>
-            </select>
-            <label class="inline-num compact-num" title="可选：填入接触式 NTC 实测温差 (°C)">
-              <span>NTC</span>
-              <input id="ntc-delta" type="number" step="0.1" min="-5" max="15" placeholder="ΔT">
-            </label>
-          </div>
-          <button id="save" class="step-btn btn-accent" type="button" title="快捷键 S：保存当前温度矩阵、标注截图与记录">
-            <span class="step-num">2</span>
-            <span>归档记录</span>
-            <kbd>S</kbd>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <aside class="sidebar">
-      <div class="hero-card" id="hero-card" data-level="none">
-        <div class="status-head">
-          <p id="grade" class="grade">等待画面</p>
-          <span id="stability" class="pill" hidden>—</span>
-        </div>
-
-        <div class="delta-row">
-          <p id="delta" class="delta is-empty" data-level="none">暂无温差</p>
-          <span id="delta-max-badge" class="delta-sub" hidden>峰值 —</span>
-        </div>
-
-        <div class="gauge" aria-label="三级温差阈值标尺">
-          <div class="gauge-track">
-            <div class="gauge-zone zone-0"></div>
-            <div class="gauge-zone zone-1"></div>
-            <div class="gauge-zone zone-2"></div>
-            <div id="gauge-pin" class="gauge-pin" hidden></div>
-          </div>
-          <div class="gauge-labels">
-            <span>0°C</span>
-            <span>1.0°C 关注</span>
-            <span>2.2°C 告警</span>
-            <span>4.0+</span>
-          </div>
-        </div>
-
-        <div class="dual-cards">
-          <div class="roi-card card-wound">
-            <span class="roi-card-title">创口区 Tw</span>
-            <strong id="card-wound-val" class="roi-card-val">—</strong>
-            <span id="card-wound-sub" class="roi-card-sub">等待框选</span>
-          </div>
-          <div class="roi-card card-ref">
-            <span class="roi-card-title">对照皮肤 Tref</span>
-            <strong id="card-ref-val" class="roi-card-val">—</strong>
-            <span id="card-ref-sub" class="roi-card-sub">等待框选</span>
-          </div>
-        </div>
-
-        <div id="regions" class="regions" hidden></div>
-        <p id="message" class="message" hidden></p>
-      </div>
-
-      <nav class="side-tabs" role="tablist" aria-label="右侧详情页签">
-        <button type="button" class="tab-btn is-on" data-tab="live">实时参数</button>
-        <button type="button" class="tab-btn" data-tab="trend">
-          趋势复盘 <span id="tab-count" class="tab-badge">0</span>
+  <div class="app-shell">
+    <!-- 左侧紧凑 5 栏导航 -->
+    <nav class="sidenav" aria-label="工作站主导航">
+      <div class="sidenav-group">
+        <button type="button" class="nav-item is-on" data-page="screen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v12H3zM8 20h8M12 16v4"/></svg>
+          <span>实时筛查</span>
         </button>
-        <button type="button" class="tab-btn" data-tab="lab">验收台</button>
-        <button type="button" class="tab-btn" data-tab="clinic">
-          临床档案 <span id="clinic-count" class="tab-badge">0</span>
+        <button type="button" class="nav-item" data-page="reports">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>
+          <span>报告中心</span>
+          <em id="nav-drafts-badge" class="nav-badge">0</em>
         </button>
-      </nav>
+        <button type="button" class="nav-item" data-page="archive">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/></svg>
+          <span>患者档案</span>
+          <em id="nav-patients-badge" class="nav-badge">0</em>
+        </button>
+        <button type="button" class="nav-item" data-page="trend">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16M7 15l4-4 3 2 5-7"/></svg>
+          <span>趋势与验收</span>
+          <em id="tab-count" class="nav-badge">0</em>
+        </button>
+        <button type="button" class="nav-item" data-page="evidence">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 3v6c0 5-3 8-8 11-5-3-8-6-8-11V5zM8 11l2 2 5-5"/></svg>
+          <span>医学知识库</span>
+        </button>
+      </div>
 
-      <div class="tab-body">
-        <section id="tab-live" class="tab-panel is-on">
-          <div id="physics-box" class="subcard" hidden>
-            <div class="subcard-head">
-              <h2>空间热扩散特征</h2>
-              <span id="physics-badge" class="pattern-badge">—</span>
+      <div class="sidenav-footer">
+        <div class="safety-box">
+          <strong>医学安全边界</strong>
+          <p>ΔT 与风险等级由本地规则引擎独占；仅作辅助筛查，不替代临床诊断；热像默认不离本机。</p>
+        </div>
+      </div>
+    </nav>
+
+    <!-- 中间主工作区 -->
+    <main class="main-area">
+      <!-- ==================== 视图 1：实时筛查 ==================== -->
+      <section id="page-screen" class="page is-on">
+        <div id="imported-banner" class="imported-banner" hidden>
+          <div class="imported-banner-info">
+            <span class="chip-tag is-teal">已导入测量 JSON</span>
+            <strong id="imported-banner-title">—</strong>
+            <span id="imported-banner-sub">—</span>
+          </div>
+          <div class="imported-banner-actions">
+            <button id="imported-save-draft" type="button" class="mini-btn btn-teal">存为草稿</button>
+            <button id="imported-clear" type="button" class="mini-btn">清除并切回实时</button>
+          </div>
+        </div>
+
+        <!-- 顶部 4 格 KPI 指标条 -->
+        <div class="kpi-grid">
+          <div class="kpi-card accent-wound">
+            <div class="kpi-head">
+              <span>创口区均温 Tw</span>
+              <i class="kpi-code">W</i>
             </div>
-            <div class="phys-grid">
-              <div class="phys-cell">
-                <span>半高热斑面积</span>
-                <strong id="phys-area">—</strong>
-                <em id="phys-diam">—</em>
-              </div>
-              <div class="phys-cell">
-                <span>径向衰减斜率</span>
-                <strong id="phys-slope">—</strong>
-                <em>0 ~ 24 mm 拟合</em>
-              </div>
-              <div class="phys-cell">
-                <span>热晕扩散比</span>
-                <strong id="phys-halo">—</strong>
-                <em>≥0.5°C / 半高核</em>
-              </div>
-              <div class="phys-cell">
-                <span>形态长宽比</span>
-                <strong id="phys-elong">—</strong>
-                <em>≥2.6 提示条索血管</em>
-              </div>
-            </div>
-            <div id="radial-bars" class="radial-bars"></div>
+            <strong id="card-wound-val" class="kpi-val">—</strong>
+            <small id="card-wound-sub" class="kpi-sub">等待框选</small>
           </div>
 
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>运行与传感参数</h2>
-              <div class="head-actions">
-                <span id="matrix-tag" class="muted-tag">—</span>
-                <button id="probe-btn" type="button" class="mini-btn" title="探测接入摄像头支持的视频编码与 16bit 温度流">探测编码</button>
+          <div class="kpi-card accent-ref">
+            <div class="kpi-head">
+              <span>对照皮肤 Tref</span>
+              <i class="kpi-code">R</i>
+            </div>
+            <strong id="card-ref-val" class="kpi-val">—</strong>
+            <small id="card-ref-sub" class="kpi-sub">等待框选</small>
+          </div>
+
+          <div class="kpi-card accent-delta" id="hero-card" data-level="none">
+            <div class="kpi-head">
+              <span>相对温差 ΔT</span>
+              <span id="stability" class="pill" hidden>—</span>
+            </div>
+            <div class="delta-row">
+              <p id="delta" class="delta is-empty" data-level="none">暂无温差</p>
+              <span id="delta-max-badge" class="delta-sub" hidden>峰值 —</span>
+            </div>
+            <small id="grade" class="kpi-sub grade-inline">等待画面</small>
+          </div>
+
+          <div class="kpi-card accent-neutral">
+            <div class="kpi-head">
+              <span>采集状态 / 掩膜占比</span>
+              <i class="kpi-code">A</i>
+            </div>
+            <strong id="kpi-extra-val" class="kpi-val">—</strong>
+            <small id="kpi-extra-sub" class="kpi-sub">300 mm · ε=0.98</small>
+          </div>
+        </div>
+
+        <div class="screen-grid">
+          <!-- 左：深色高对比度热像画布 -->
+          <section class="thermal-stage">
+            <div class="stage-top">
+              <div id="view-tabs" class="segmented" role="tablist" aria-label="热像视图模式">
+                <button type="button" class="seg-btn is-on" data-view="original">原图</button>
+                <button type="button" class="seg-btn" data-view="removed">去背景</button>
+                <button type="button" class="seg-btn" data-view="compare">前后对比</button>
+                <button type="button" class="seg-btn" data-view="isotherm">等温差线 ΔT</button>
+              </div>
+
+              <div class="stage-top-right">
+                <label class="select-pill dark-pill compact" id="weight-wrap">
+                  <span>分割</span>
+                  <select id="weight" aria-label="分割模型权重">
+                    <option value="thermal" selected>热像伪彩分割 (推荐)</option>
+                    <option value="u2netp">U2-Net 小</option>
+                    <option value="u2net">U2-Net 标准</option>
+                    <option value="human">人体分割</option>
+                  </select>
+                </label>
+                <button id="load-example-btn" type="button" class="mini-btn dark-btn" title="一键载入 examples/measurement.json 演示完整筛查→草稿→归档流程">示例 JSON</button>
+                <button id="import-json-btn" type="button" class="mini-btn dark-btn" title="从本机导入自定义 wound-measurement/v1 JSON 文件">导入 JSON</button>
+                <input id="import-json-file" type="file" accept=".json,application/json" hidden>
+                <div id="mode-banner" class="mode-banner" hidden>
+                  <span id="mode-banner-text">已锁定</span>
+                  <button id="resume-live" type="button" class="mini-btn">返回实时</button>
+                </div>
               </div>
             </div>
-            <dl id="lines"></dl>
-            <pre id="probe-output" class="probe-output" hidden></pre>
-          </div>
-        </section>
 
-        <section id="tab-trend" class="tab-panel">
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>纵向 ΔT 变化趋势</h2>
-              <button id="refresh-records" type="button" class="mini-btn">刷新</button>
+            <div class="stage-row">
+              <div class="scale" id="scale" aria-label="温度色标尺">
+                <span id="scale-top">40°C</span>
+                <div class="scale-track-wrap">
+                  <div class="scale-bar" id="scale-bar"></div>
+                  <div class="scale-ticks" id="scale-ticks">
+                    <span>36</span>
+                    <span>32</span>
+                  </div>
+                  <i id="scale-wound" class="scale-pin pin-wound" hidden title="创口均值位置"></i>
+                  <i id="scale-ref" class="scale-pin pin-ref" hidden title="对照均值位置"></i>
+                </div>
+                <span id="scale-bottom">28°C</span>
+              </div>
+
+              <div class="viewport" id="viewport">
+                <img id="frame" alt="实时热像画面" src="/stream.mjpg">
+                <canvas id="overlay"></canvas>
+                <div id="probe" class="float-chip chip-probe" hidden>—</div>
+                <div id="pose-chip" class="float-chip chip-pose" hidden>—</div>
+                <div id="view-hint" class="float-chip chip-hint" hidden>—</div>
+                <div id="toast" class="toast" hidden></div>
+              </div>
             </div>
-            <p id="trend-summary" class="trend-summary">尚无足够历史记录（至少保存 2 次以追踪趋势）</p>
-            <div id="trend-chart-wrap" class="trend-chart-wrap">
-              <svg id="trend-chart" viewBox="0 0 340 124" preserveAspectRatio="none" aria-label="温差趋势折线图"></svg>
+
+            <div class="action-bar">
+              <div class="action-group">
+                <button id="auto" class="tool-btn dark-btn is-on" type="button" title="快捷键 A：切换自动热区追踪与手动框选">
+                  自动热区 <kbd>A</kbd>
+                </button>
+                <button id="mode-wound" class="tool-btn dark-btn" type="button" title="快捷键 1：绘制或微调橙色创口框">
+                  <span class="dot dot-wound"></span>创口框 <kbd>1</kbd>
+                </button>
+                <button id="mode-ref" class="tool-btn dark-btn" type="button" title="快捷键 2：绘制或微调蓝色对照框">
+                  <span class="dot dot-ref"></span>对照框 <kbd>2</kbd>
+                </button>
+                <button id="align-pose" class="tool-btn dark-btn" type="button" title="快捷键 P：按手掌质心与主轴对齐 ROI">
+                  手姿对齐 <kbd>P</kbd>
+                </button>
+              </div>
+
+              <div class="action-group action-right">
+                <button id="measure" class="step-btn dark-btn" type="button" title="快捷键 M：连续采集 10 帧稳态温度矩阵并锁定">
+                  <span class="step-num">1</span>
+                  <span id="measure-label">稳定采 10 帧</span>
+                  <kbd>M</kbd>
+                </button>
+                <button id="lab-toggle" class="tool-btn dark-btn" type="button" title="展开实验分组与 NTC 标定输入">
+                  验收标签
+                </button>
+                <div id="lab-drawer" class="lab-drawer" hidden>
+                  <select id="exp-group" aria-label="验收实验分组">
+                    <option value="日常初筛">日常初筛</option>
+                    <option value="空手基线">空手基线 (档0)</option>
+                    <option value="模拟偏热">模拟偏热 (档1)</option>
+                    <option value="模拟明显温升">模拟明显温升 (档2)</option>
+                    <option value="反例">手持/干扰反例</option>
+                  </select>
+                  <label class="inline-num compact-num" title="可选：填入接触式 NTC 实测温差 (°C)">
+                    <span>NTC</span>
+                    <input id="ntc-delta" type="number" step="0.1" min="-5" max="15" placeholder="ΔT">
+                  </label>
+                </div>
+                <button id="save" class="step-btn btn-accent-dark" type="button" title="快捷键 S：保存实验帧（.npy + .png + CSV）">
+                  <span class="step-num">2</span>
+                  <span>归档记录</span>
+                  <kbd>S</kbd>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 右：判定标尺、临床依据预览、空间热扩散与编码探测 -->
+          <div class="screen-side">
+            <div class="card rule-preview-card">
+              <div class="card-head">
+                <div>
+                  <h2>实时温差判定</h2>
+                  <span class="card-sub">课程三级标尺（1.0 / 2.2°C）· 报告走 dsh 四级循证口径</span>
+                </div>
+                <span class="chip-tag">非确诊</span>
+              </div>
+
+              <div class="gauge" aria-label="三级温差阈值标尺">
+                <div class="gauge-track">
+                  <div class="gauge-zone zone-0"></div>
+                  <div class="gauge-zone zone-1"></div>
+                  <div class="gauge-zone zone-2"></div>
+                  <div id="gauge-pin" class="gauge-pin" hidden></div>
+                </div>
+                <div class="gauge-labels">
+                  <span>0°C</span>
+                  <span>1.0°C 关注</span>
+                  <span>2.2°C 告警</span>
+                  <span>4.0+</span>
+                </div>
+              </div>
+
+              <div id="regions" class="regions" hidden></div>
+              <p id="message" class="message-box" hidden></p>
+
+              <div class="clinical-preview-bar">
+                <div class="clinical-preview-head">
+                  <span class="muted-tag">临床循证规则预览（wound-delta-v1）</span>
+                  <span id="clinical-rule-badge" class="gate-pill">待采集</span>
+                </div>
+                <div class="ev-chip-row">
+                  <button type="button" class="ev-jump-btn" data-ev="E002">E002 ≥2.55°C</button>
+                  <button type="button" class="ev-jump-btn" data-ev="E003">E003 >2.2°C</button>
+                  <button type="button" class="ev-jump-btn" data-ev="E004">E004 重复趋势</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="physics-box" class="card" hidden>
+              <div class="card-head">
+                <h2>空间热扩散特征</h2>
+                <span id="physics-badge" class="pattern-badge">—</span>
+              </div>
+              <div class="phys-grid">
+                <div class="phys-cell">
+                  <span>半高热斑面积</span>
+                  <strong id="phys-area">—</strong>
+                  <em id="phys-diam">—</em>
+                </div>
+                <div class="phys-cell">
+                  <span>径向衰减斜率</span>
+                  <strong id="phys-slope">—</strong>
+                  <em>0 ~ 24 mm 拟合</em>
+                </div>
+                <div class="phys-cell">
+                  <span>热晕扩散比</span>
+                  <strong id="phys-halo">—</strong>
+                  <em>≥0.5°C / 半高核</em>
+                </div>
+                <div class="phys-cell">
+                  <span>形态长宽比</span>
+                  <strong id="phys-elong">—</strong>
+                  <em>≥2.6 提示条索血管</em>
+                </div>
+              </div>
+              <div id="radial-bars" class="radial-bars"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h2>运行与传感参数</h2>
+                <div class="head-actions">
+                  <span id="matrix-tag" class="muted-tag">—</span>
+                  <button id="probe-btn" type="button" class="mini-btn" title="探测接入摄像头支持的视频编码与 16bit 温度流">探测编码</button>
+                </div>
+              </div>
+              <dl id="lines"></dl>
+              <pre id="probe-output" class="probe-output" hidden></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== 视图 2：报告中心 ==================== -->
+      <section id="page-reports" class="page">
+        <div id="reports-list-view">
+          <div class="page-head">
+            <div>
+              <h2>报告中心 · 临床草稿</h2>
+              <p>实时筛查保存的草稿会进入这里，补充创口结构化详情并通过质量门禁后，即可归档为患者档案并生成可追溯 HTML 报告。</p>
+            </div>
+            <div class="page-head-actions">
+              <button id="refresh-clinic" type="button">刷新列表</button>
+              <button id="reports-new-draft" type="button" class="btn-teal">将当前测量存为草稿</button>
             </div>
           </div>
 
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>历史归档 · 点击回载 .npy 复盘</h2>
-              <span id="history-count" class="muted-tag">0 条</span>
-            </div>
-            <div id="history-list" class="history-list"></div>
+          <div class="card">
+            <div id="clinic-drafts" class="rich-list"></div>
           </div>
-        </section>
+        </div>
 
-        <section id="tab-lab" class="tab-panel">
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>快速实验录入</h2>
+        <div id="reports-detail-view" hidden>
+          <div class="card detail-header-card">
+            <input id="draft-edit-title" type="text" maxlength="60" class="detail-title-input" aria-label="草稿名称">
+            <span id="draft-gate-pill" class="gate-pill">—</span>
+            <button id="draft-back-btn" type="button">返回列表</button>
+          </div>
+
+          <div class="kpi-grid detail-kpis">
+            <div class="kpi-card accent-wound">
+              <div class="kpi-head"><span>创口区均温</span><i class="kpi-code">W</i></div>
+              <strong id="draft-kpi-tw" class="kpi-val">—</strong>
+              <small class="kpi-sub">ROI 平均温度</small>
+            </div>
+            <div class="kpi-card accent-ref">
+              <div class="kpi-head"><span>远端参考皮温</span><i class="kpi-code">R</i></div>
+              <strong id="draft-kpi-tr" class="kpi-val">—</strong>
+              <small class="kpi-sub">健康皮肤参考</small>
+            </div>
+            <div class="kpi-card accent-delta">
+              <div class="kpi-head"><span>相对温差 ΔT</span><i class="kpi-code">ΔT</i></div>
+              <strong id="draft-kpi-dt" class="kpi-val">—</strong>
+              <small class="kpi-sub">主要筛查指标</small>
+            </div>
+            <div class="kpi-card accent-neutral">
+              <div class="kpi-head"><span>热区面积占比</span><i class="kpi-code">A</i></div>
+              <strong id="draft-kpi-area" class="kpi-val">—</strong>
+              <small class="kpi-sub">ROI / 全画面</small>
+            </div>
+          </div>
+
+          <div id="draft-rule-card" class="card detail-rule-card">
+            <div class="card-head">
+              <div>
+                <span class="muted-tag">本地临床规则结果（wound-delta-v1 · dsh 四级口径）</span>
+                <h3 id="draft-rule-title">—</h3>
+              </div>
+              <span id="draft-rule-badge" class="chip-tag">非确诊</span>
+            </div>
+            <p id="draft-gate-note" class="rule-desc"></p>
+          </div>
+
+          <div class="detail-two-col">
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>结构化创口详情</h2>
+                  <span class="card-sub">手动编辑或通过右侧“循证对话”自动提取；直接身份信息不入库</span>
+                </div>
+                <button id="draft-save-details" type="button" class="btn-teal">保存修改</button>
+              </div>
+              <div class="detail-form-grid">
+                <label class="lab-field">
+                  <span>创口部位</span>
+                  <input id="draft-site" type="text" maxlength="120" placeholder="例如：右手背第三掌骨远端">
+                </label>
+                <label class="lab-field">
+                  <span>病程 / 持续时间</span>
+                  <input id="draft-duration" type="text" maxlength="120" placeholder="例如：外伤后第 4 天">
+                </label>
+                <label class="lab-field">
+                  <span>创面表现</span>
+                  <input id="draft-symptoms" type="text" maxlength="120" placeholder="例如：边缘轻度红肿、少量淡黄渗液">
+                </label>
+                <label class="lab-field">
+                  <span>处理与用药史</span>
+                  <input id="draft-treatment" type="text" maxlength="120" placeholder="例如：碘伏消毒后无菌敷料覆盖">
+                </label>
+                <label class="lab-field full-span">
+                  <span>其他备注（勿填姓名 / 身份证号 / 联系方式）</span>
+                  <input id="draft-notes" type="text" maxlength="120" placeholder="可选补充备注">
+                </label>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>补充记录</h2>
+                  <span class="card-sub">来自右侧循证对话提取或表单修改</span>
+                </div>
+                <button id="draft-open-chat" type="button" class="btn-teal-soft">打开循证对话</button>
+              </div>
+              <div id="draft-supplements-list" class="rich-list"></div>
+            </div>
+          </div>
+
+          <div class="card archive-footer-bar">
+            <p id="draft-archive-hint">存入患者档案时自动编号（患者01、患者02…），写入只追加测量记录并生成带 SHA-256 哈希的 HTML 报告；仅质量门禁通过的草稿可归档。</p>
+            <div class="page-head-actions">
+              <button id="draft-archive" type="button" class="btn-teal">保存为患者档案</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== 视图 3：患者档案 ==================== -->
+      <section id="page-archive" class="page">
+        <div class="page-head">
+          <div>
+            <h2>患者档案 · 伪匿名本地记录</h2>
+            <p>自动编号为患者01（PT-0001）起递增，不含姓名与联系方式；测量记录只追加不覆盖，所有报告均保留草稿状态待医护复核。</p>
+          </div>
+          <span id="clinic-patient-count" class="chip-tag">0 位患者</span>
+        </div>
+
+        <div class="archive-grid">
+          <div class="card">
+            <div class="card-head">
+              <h2>档案列表</h2>
+              <span class="muted-tag">点击查看详情</span>
+            </div>
+            <div id="clinic-patients" class="rich-list"></div>
+          </div>
+
+          <div class="archive-detail-col">
+            <div class="card">
+              <div class="card-head">
+                <h2 id="patient-history-title">检测记录</h2>
+                <span class="muted-tag">MEASUREMENT HISTORY</span>
+              </div>
+              <div id="patient-history-wrap"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h2>可追溯 HTML 筛查报告</h2>
+                <span class="muted-tag">草稿 · 需医护复核</span>
+              </div>
+              <div id="clinic-reports" class="rich-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== 视图 4：趋势与验收 ==================== -->
+      <section id="page-trend" class="page">
+        <div class="page-head">
+          <div>
+            <h2>随访趋势与课程验收统计台</h2>
+            <p>追踪纵向 ΔT 变化趋势，统计同组重复性极差（目标 ≤ 0.30 °C）与 NTC 实测误差，并支持点击任意历史帧回载 .npy 离线复盘。</p>
+          </div>
+          <div class="page-head-actions">
+            <button id="refresh-records" type="button">刷新记录</button>
+            <button id="copy-md" type="button">复制 Markdown 表</button>
+            <button id="export-csv" type="button" class="btn-teal">下载 CSV</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>纵向 ΔT 变化趋势</h2>
+            <span id="history-count" class="muted-tag">0 条</span>
+          </div>
+          <p id="trend-summary" class="trend-summary">尚无足够历史记录（至少保存 2 次以追踪趋势）</p>
+          <div id="trend-chart-wrap" class="trend-chart-wrap">
+            <svg id="trend-chart" viewBox="0 0 660 200" preserveAspectRatio="none" aria-label="温差趋势折线图"></svg>
+          </div>
+        </div>
+
+        <div class="trend-two-col">
+          <div class="card">
+            <div class="card-head">
+              <h2>分组重复性（≤ 0.30 °C）与快速录入</h2>
               <span class="muted-tag">方案第 6 节验收</span>
             </div>
-            <div class="lab-form">
+            <div id="group-stats" class="group-stats"></div>
+            <div class="lab-inline-form">
               <label class="lab-field">
                 <span>实验分组</span>
                 <select id="exp-group-lab">
@@ -296,89 +557,143 @@
                 <span>NTC 实测 ΔT (°C，可选)</span>
                 <input id="ntc-delta-lab" type="number" step="0.1" min="-5" max="15" placeholder="例如 1.2">
               </label>
-              <button id="save-lab" type="button" class="btn-primary full-btn">按当前分组归档这一帧</button>
+              <button id="save-lab" type="button" class="btn-teal full-btn">按当前分组归档这一帧</button>
             </div>
           </div>
 
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>重复性极差（目标 ≤ 0.30 °C）与 NTC 误差</h2>
+          <div class="card">
+            <div class="card-head">
+              <h2>历史归档 · 点击回载 .npy 离线复盘</h2>
+              <span class="muted-tag">回载后自动切回热像视口</span>
             </div>
-            <div id="group-stats" class="group-stats"></div>
+            <div id="history-list" class="rich-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== 视图 5：医学知识库 ==================== -->
+      <section id="page-evidence" class="page">
+        <div class="page-head">
+          <div>
+            <h2>已审核医学循证知识库（E001–E004）</h2>
+            <p>所有阈值提示与循证对话引用均限定在下述已核验文献范围内，超人群或测量条件时不得直接外推为确诊标准。</p>
+          </div>
+        </div>
+        <div id="clinic-evidence" class="evidence-grid"></div>
+      </section>
+    </main>
+
+    <!-- 右侧可折叠：循证对话医师助手抽屉 -->
+    <aside id="assistant-drawer" class="assistant-drawer" hidden aria-label="循证对话侧边窗口">
+      <div class="assistant-head">
+        <div class="assistant-title-wrap">
+          <span class="assistant-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-12.3 7.6L3 21l1.9-5.7A8.5 8.5 0 1 1 21 11.5z"/><path d="M8 11h8M8 15h5"/></svg>
+          </span>
+          <div>
+            <h2>循证对话</h2>
+            <small id="assistant-mode-sub">离线规则模式 · 只解释不确诊</small>
+          </div>
+        </div>
+        <div class="assistant-head-btns">
+          <button id="assistant-rules-btn" type="button" class="mini-btn">规则</button>
+          <button id="assistant-cfg-btn" type="button" class="mini-btn">模型</button>
+          <button id="assistant-close-btn" type="button" class="mini-btn" title="收起侧边栏">✕</button>
+        </div>
+      </div>
+
+      <div id="assistant-context" class="assistant-context">
+        <span class="ctx-label">上下文</span>
+        <span id="assistant-ctx-draft" class="chip-tag is-orange" hidden></span>
+        <span id="assistant-ctx-rule" class="gate-pill">待本地规则校验</span>
+        <span id="assistant-ctx-delta" class="muted-tag">ΔT —</span>
+      </div>
+
+      <!-- 子视图 A：对话主体 -->
+      <div id="assistant-chat-view" class="assistant-body">
+        <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite"></div>
+
+        <div id="assistant-pending-card" class="pending-detail-card" hidden>
+          <strong>从刚才的对话中提取到补充信息，是否写入草稿？</strong>
+          <div id="assistant-pending-fields" class="pending-fields"></div>
+          <div class="pending-actions">
+            <button id="assistant-apply-pending" type="button" class="mini-btn btn-teal">写入草稿</button>
+            <button id="assistant-dismiss-pending" type="button" class="mini-btn">忽略</button>
+          </div>
+        </div>
+
+        <div id="assistant-quick" class="assistant-quick"></div>
+
+        <div class="assistant-composer">
+          <textarea id="assistant-input" rows="2" placeholder="提问或描述创口情况（如：右手背外伤4天，边缘轻度红肿，碘伏换药）"></textarea>
+          <div class="assistant-composer-bar">
+            <span class="muted-tag">Enter 发送 · Shift+Enter 换行</span>
+            <button id="assistant-send-btn" type="button" class="btn-teal">发送</button>
+          </div>
+          <p class="assistant-disclaimer">辅助筛查，不替代临床诊断；外发前自动脱敏，仅传去标识化指标，不发送热像和身份信息。</p>
+        </div>
+      </div>
+
+      <!-- 子视图 B：医师角色规则 -->
+      <div id="assistant-rules-view" class="assistant-subview" hidden>
+        <div class="subview-bar">
+          <strong>医师角色安全规则</strong>
+          <button id="assistant-rules-back" type="button" class="mini-btn">返回对话</button>
+        </div>
+        <div id="assistant-rules-body" class="subview-scroll"></div>
+      </div>
+
+      <!-- 子视图 C：可选大模型 API 设置 -->
+      <div id="assistant-cfg-view" class="assistant-subview" hidden>
+        <div class="subview-bar">
+          <strong>可选大模型配置（本机保存）</strong>
+          <button id="assistant-cfg-back" type="button" class="mini-btn">返回对话</button>
+        </div>
+        <div class="subview-scroll">
+          <p class="cfg-tip">留空 API Key 时默认使用完全离线的本地规则引擎与证据库；填入 DeepSeek / OpenAI 兼容接口后可增强自然语言解释，回答仍经过服务端防确诊/防用药校验拦截。</p>
+          <div class="lab-form">
+            <label class="lab-field">
+              <span>API Base URL</span>
+              <input id="llm-base-url" type="text" placeholder="https://api.deepseek.com/v1">
+            </label>
+            <label class="lab-field">
+              <span>模型名称</span>
+              <input id="llm-model" type="text" placeholder="deepseek-chat">
+            </label>
+            <label class="lab-field">
+              <span>API Key（<em id="llm-key-status">未配置</em>）</span>
+              <input id="llm-api-key" type="password" placeholder="留空保持不变；输入新 Key 覆盖">
+            </label>
+            <label class="cfg-check">
+              <input id="llm-enabled" type="checkbox" checked>
+              <span>启用外部大模型增强解释（取消勾选强制纯本地规则）</span>
+            </label>
             <div class="export-row">
-              <button id="copy-md" type="button" class="tool-btn">复制 Markdown 验收表</button>
-              <button id="export-csv" type="button" class="tool-btn">下载 CSV 记录</button>
+              <button id="llm-save-btn" type="button" class="btn-teal">保存配置</button>
+              <button id="llm-clear-key-btn" type="button">清除 Key</button>
             </div>
           </div>
-        </section>
-
-        <section id="tab-clinic" class="tab-panel">
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>临床草稿（含质控门禁）</h2>
-              <button id="refresh-clinic" type="button" class="mini-btn">刷新</button>
-            </div>
-            <div class="clinic-create-row">
-              <input id="draft-title" type="text" maxlength="60" placeholder="草稿标题，例如：右手背创口初筛" aria-label="草稿标题">
-              <button id="save-draft" type="button" class="btn-primary">存为草稿</button>
-            </div>
-            <p class="clinic-disclaimer">仅通过真实温度矩阵与质量门禁的草稿可归档为患者档案；本系统仅作辅助筛查，不替代临床诊断。</p>
-            <div id="clinic-drafts" class="clinic-list"></div>
-          </div>
-
-          <div id="draft-editor" class="subcard" hidden>
-            <div class="subcard-head">
-              <h2 id="draft-editor-title">草稿详情</h2>
-              <span id="draft-gate-pill" class="gate-pill">—</span>
-            </div>
-            <p id="draft-gate-note" class="clinic-note" hidden></p>
-            <div class="lab-form">
-              <label class="lab-field">
-                <span>创口部位</span>
-                <input id="draft-site" type="text" maxlength="120" placeholder="例如：右手背第三掌骨远端">
-              </label>
-              <label class="lab-field">
-                <span>病程 / 持续时间</span>
-                <input id="draft-duration" type="text" maxlength="120" placeholder="例如：外伤后第 4 天">
-              </label>
-              <label class="lab-field">
-                <span>创面表现</span>
-                <input id="draft-symptoms" type="text" maxlength="120" placeholder="例如：边缘轻度红肿、少量淡黄渗液">
-              </label>
-              <label class="lab-field">
-                <span>处理与换药史</span>
-                <input id="draft-treatment" type="text" maxlength="120" placeholder="例如：碘伏消毒后无菌敷料覆盖">
-              </label>
-              <label class="lab-field">
-                <span>其他备注（勿填姓名/身份证号）</span>
-                <input id="draft-notes" type="text" maxlength="120" placeholder="可选备注">
-              </label>
-              <div class="export-row">
-                <button id="draft-save-details" type="button" class="tool-btn">保存临床详情</button>
-                <button id="draft-archive" type="button" class="btn-accent">归档为患者档案</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>患者档案与 HTML 报告</h2>
-              <span id="clinic-patient-count" class="muted-tag">0 位</span>
-            </div>
-            <div id="clinic-patients" class="clinic-list"></div>
-            <div id="clinic-reports" class="clinic-list" style="margin-top:8px"></div>
-          </div>
-
-          <div class="subcard">
-            <div class="subcard-head">
-              <h2>循证医学依据（E001–E004）</h2>
-            </div>
-            <div id="clinic-evidence" class="clinic-list"></div>
-          </div>
-        </section>
+        </div>
       </div>
     </aside>
-  </main>
+  </div>
+
+  <!-- 保存草稿命名弹窗 -->
+  <div id="draft-modal" class="modal-mask" hidden role="dialog" aria-label="保存为草稿">
+    <div class="modal-card">
+      <h3>保存为临床草稿</h3>
+      <p class="modal-sub">草稿将进入“报告中心”，可在那里补充结构化创口详情并通过质量门禁后归档为患者档案。</p>
+      <div id="draft-modal-meta" class="modal-meta"></div>
+      <label class="lab-field">
+        <span>草稿名称</span>
+        <input id="draft-modal-title" type="text" maxlength="60" placeholder="例如：右手背创口初筛">
+      </label>
+      <div class="modal-actions">
+        <button id="draft-modal-cancel" type="button">取消</button>
+        <button id="draft-modal-confirm" type="button" class="btn-teal">保存草稿</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

@@ -1,0 +1,10 @@
+{
+  "source": "auto",
+  "camera": 0,
+  "fps": 10,
+  "raw_scale": 0.01,
+  "raw_offset": 0.0,
+  "roi": "auto",
+  "scenario": "strong",
+  "idle_exit": 120
+}

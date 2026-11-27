@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import app.assistant as assistant_mod
 import app.clinic as clinic_mod
 import app.engine as eng_mod
 from app.engine import Engine, list_cameras
@@ -81,9 +82,40 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             draft_id = qs.get("draft_id", [""])[0]
             self._json(clinic_mod.draft_get(draft_id))
+        elif path == "/api/clinic/patient/history":
+            qs = parse_qs(parsed.query)
+            ref = qs.get("patient_ref", [""])[0]
+            hist = clinic_mod.archive_history(ref)
+            rpts = clinic_mod.report_list(ref)
+            self._json({**hist, "reports": rpts.get("reports") or []})
+        elif path == "/api/clinic/measurement":
+            try:
+                m = clinic_mod.measurement_from_engine(ENGINE, include_image=False)
+                analysis = clinic_mod.thermal_analyze(m)
+                self._json({"ok": True, "measurement": m, "analysis": analysis})
+            except RuntimeError as exc:
+                self._json({"ok": False, "error": {"code": "no_frame", "message": str(exc)}}, 409)
+        elif path == "/api/clinic/example":
+            ex_path = ROOT.parent / "examples" / "measurement.json"
+            if not ex_path.exists():
+                self._json({"ok": False, "error": {"code": "missing_example", "message": "未找到示例测量文件"}}, 404)
+            else:
+                m = json.loads(ex_path.read_text(encoding="utf-8"))
+                analysis = clinic_mod.thermal_analyze(m)
+                self._json({"ok": True, "measurement": m, "analysis": analysis})
         elif path == "/api/clinic/evidence":
             qs = parse_qs(parsed.query)
             self._json(clinic_mod.evidence_search(qs.get("q", [""])[0], qs.get("scenario", [""])[0]))
+        elif path == "/api/assistant/rules":
+            self._json(
+                {
+                    "ok": True,
+                    "rules": assistant_mod.rules_for_ui(),
+                    "config": assistant_mod.load_llm_config(mask_secret=True),
+                }
+            )
+        elif path == "/api/assistant/config":
+            self._json({"ok": True, "config": assistant_mod.load_llm_config(mask_secret=True)})
         elif path.startswith("/api/clinic/report/"):
             report_id = path.split("/api/clinic/report/", 1)[1].strip("/")
             content = clinic_mod.read_report_html(report_id)
@@ -202,6 +234,39 @@ class Handler(BaseHTTPRequestHandler):
             self._json(clinic_mod.draft_update(body))
         elif path == "/api/clinic/draft/archive":
             self._json(clinic_mod.draft_archive(str(body.get("draft_id") or "")))
+        elif path == "/api/clinic/analyze":
+            m = body.get("measurement")
+            if not isinstance(m, dict):
+                self._json({"ok": False, "error": {"code": "invalid_measurement", "message": "请提供有效测量 JSON 对象"}}, 400)
+                return
+            self._json(clinic_mod.thermal_analyze(m))
+        elif path == "/api/assistant/config":
+            cfg = assistant_mod.save_llm_config(body)
+            self._json({"ok": True, "config": cfg})
+        elif path == "/api/assistant/chat":
+            question = str(body.get("question") or "")
+            history = body.get("history") if isinstance(body.get("history"), list) else []
+            draft_ctx = body.get("draft") if isinstance(body.get("draft"), dict) else None
+            measurement = body.get("measurement") if isinstance(body.get("measurement"), dict) else None
+            if body.get("draft_id") and (draft_ctx is None or measurement is None):
+                got = clinic_mod.draft_get(str(body.get("draft_id")))
+                if got.get("ok") and got.get("draft"):
+                    draft_ctx = got["draft"]
+                    if measurement is None:
+                        measurement = got["draft"].get("measurement")
+            if measurement is None:
+                try:
+                    if ENGINE.running or ENGINE.temps is not None or ENGINE._est_temps is not None:
+                        measurement = clinic_mod.measurement_from_engine(ENGINE, include_image=False)
+                except Exception:
+                    measurement = None
+            res = assistant_mod.chat_reply(
+                question=question,
+                measurement=measurement,
+                history=history,
+                draft=draft_ctx,
+            )
+            self._json(res)
         else:
             self.send_error(404)
 
