@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+import ctypes
 import json
 import os
+import platform
 import re
 import subprocess
 import threading
@@ -18,6 +20,7 @@ import cv2
 import numpy as np
 
 from app.foreground import available_models, foreground_report, set_model, solid_mask
+from app.probe_camera import decode_console_bytes
 from app.protocol import (
     DEFAULT_REF,
     DEFAULT_WOUND,
@@ -85,7 +88,47 @@ def _resolve_video_path() -> Path:
     return candidates[-1]
 
 
+def _safe_cv_path(path: Path) -> str:
+    """Windows 下若路径含中文/非 ASCII 字符，优先转 8.3 短路径避免 OpenCV FFmpeg 后端打不开。"""
+    raw = str(path)
+    if platform.system() != "Windows" or raw.isascii() or not path.exists():
+        return raw
+    try:
+        buf = ctypes.create_unicode_buffer(4096)
+        n = ctypes.windll.kernel32.GetShortPathNameW(raw, buf, len(buf))
+        if 0 < n < len(buf):
+            return buf.value
+    except Exception:
+        pass
+    return raw
+
+
+def _list_cameras_pnp() -> list[dict]:
+    """无 FFmpeg 时通过 Windows PnP 枚举已连接摄像头（仅做发现，不抢占硬件流）。"""
+    if platform.system() != "Windows":
+        return []
+    try:
+        proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+                "Get-PnpDevice -Class Camera -Status OK -ErrorAction SilentlyContinue | "
+                "Select-Object -ExpandProperty FriendlyName",
+            ],
+            capture_output=True,
+            timeout=6,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    text = decode_console_bytes(proc.stdout)
+    names = [line.strip() for line in text.splitlines() if line.strip()]
+    return [{"id": f"cam:{i}", "label": name, "dshow": name, "backend": "opencv"} for i, name in enumerate(names)]
+
+
 def list_cameras() -> list[dict]:
+    devices: list[dict] = []
     try:
         proc = subprocess.run(
             [
@@ -101,22 +144,26 @@ def list_cameras() -> list[dict]:
             capture_output=True,
             timeout=8,
         )
+        text = decode_console_bytes(proc.stderr)
+        expect_video_alt = False
+        for line in text.splitlines():
+            if "(video)" in line and '"' in line:
+                name = line.split('"', 2)[1]
+                devices.append({"id": f"cam:{len(devices)}", "label": name, "dshow": name, "backend": "dshow"})
+                expect_video_alt = True
+            elif "(audio)" in line and '"' in line:
+                expect_video_alt = False
+            elif "Alternative name" in line and '"' in line and expect_video_alt and devices:
+                alt = line.split('"', 2)[1]
+                if not devices[-1].get("alt"):
+                    devices[-1]["alt"] = alt
+                    devices[-1]["dshow"] = alt
+                expect_video_alt = False
     except (OSError, subprocess.TimeoutExpired):
-        return []
-    text = proc.stderr.decode("utf-8", errors="replace")
-    if "(video)" not in text:
-        text = proc.stderr.decode("gbk", errors="replace")
-    devices: list[dict] = []
-    for line in text.splitlines():
-        if "(video)" in line and '"' in line:
-            name = line.split('"', 2)[1]
-            devices.append({"id": f"cam:{len(devices)}", "label": name, "dshow": name})
-        elif "Alternative name" in line and '"' in line and devices:
-            alt = line.split('"', 2)[1]
-            if not devices[-1].get("alt"):
-                devices[-1]["alt"] = alt
-                devices[-1]["dshow"] = alt
-    return devices
+        devices = []
+    if devices:
+        return devices
+    return _list_cameras_pnp()
 
 
 def _encode_jpeg(image: np.ndarray) -> bytes:
@@ -171,8 +218,11 @@ class Engine:
         self.ref: Optional[dict] = dict(DEFAULT_REF)
         self.distance_mm = 300
         self.emissivity = 0.98
+        self.raw_scale = 0.01
+        self.raw_offset = 0.0
         self.source = ""
         self.source_label = ""
+        self.capture_backend = ""
         self.running = False
         self.error = ""
         self.note = "选择来源后点开始。机芯插上后先点刷新。"
@@ -342,6 +392,11 @@ class Engine:
         with self._lock:
             self.emissivity = round(min(1.0, max(0.5, float(eps))), 2)
 
+    def set_raw_calibration(self, scale: float, offset: float) -> None:
+        with self._lock:
+            self.raw_scale = float(scale)
+            self.raw_offset = float(offset)
+
     def start_measure(self) -> dict:
         with self._cond:
             if not self.running or self.temps is None:
@@ -396,8 +451,11 @@ class Engine:
                 "running": self.running,
                 "source": self.source,
                 "source_label": self.source_label,
+                "capture_backend": self.capture_backend,
                 "distance_mm": self.distance_mm,
                 "emissivity": self.emissivity,
+                "raw_scale": self.raw_scale,
+                "raw_offset": self.raw_offset,
                 "fps": self.fps,
                 "frame_count": self.frame_count,
                 "skin_spread": self.skin_spread,
@@ -432,9 +490,12 @@ class Engine:
             "running": snap["running"],
             "source": snap["source"],
             "source_label": snap["source_label"],
+            "capture_backend": snap["capture_backend"],
             "has_temperature": temps is not None,
             "distance_mm": distance,
             "emissivity": emissivity,
+            "raw_scale": snap["raw_scale"],
+            "raw_offset": snap["raw_offset"],
             "pixel_mm": round(pixel_mm(distance), 2),
             "fps": round(snap["fps"], 1),
             "frame_count": snap["frame_count"],
@@ -925,6 +986,7 @@ class Engine:
             self._measure_means.clear()
             self.running = True
             self.source = source
+            self.capture_backend = ""
             self._tracked = False
             self.selected_region = 0
             self.detection = None
@@ -962,6 +1024,12 @@ class Engine:
             idx = int(source.split(":", 1)[1])
             target = lambda: self._run_camera(idx, stop_event)
             label = source
+        elif source == "window" or source.startswith("window:"):
+            kw = source.split(":", 1)[1] if ":" in source else ""
+            if kw.lower() in ("", "camera"):
+                kw = ""
+            target = lambda: self._run_window(kw, stop_event)
+            label = f"窗口抓帧 ({kw or 'Windows 相机'})"
         else:
             with self._cond:
                 self.running = False
@@ -1307,12 +1375,14 @@ class Engine:
 
     def _run_file(self, stop: threading.Event) -> None:
         video_path = _resolve_video_path()
-        cap = cv2.VideoCapture(str(video_path))
+        cap = cv2.VideoCapture(_safe_cv_path(video_path))
         if not cap.isOpened():
             with self._cond:
                 self.error = f"打不开测试视频: {video_path}"
                 self.running = False
             return
+        with self._lock:
+            self.capture_backend = "本地视频文件"
         note = "这是测试视频的伪彩预览。颜色会自动拉对比度，不能换算成温差。"
         source_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         step = max(1, int(round(float(source_fps) / 12.0)))
@@ -1347,6 +1417,8 @@ class Engine:
 
     def _run_synthetic(self, stop: threading.Event, scenario: str = "strong") -> None:
         note = "自检用的合成温度，不是机芯。用 10 帧稳态平均与物理皮肤分割验证三级判定。"
+        with self._lock:
+            self.capture_backend = "合成温度场"
         t = 0.0
         try:
             while not stop.is_set():
@@ -1361,6 +1433,20 @@ class Engine:
 
     def _run_camera(self, index: int, stop: threading.Event) -> None:
         cameras = list_cameras()
+        errors: list[str] = []
+        if not cameras:
+            name = f"UVC Camera {index}"
+            with self._lock:
+                self.source_label = name
+            if stop.is_set() or self._run_opencv(index, name, stop, errors):
+                return
+            if stop.is_set() or self._run_winrt(name, stop, errors):
+                return
+            detail = "；".join(errors[-4:]) if errors else "未枚举到摄像头且 OpenCV 未打开"
+            with self._cond:
+                self.error = f"打不开 {name}（{detail}）。"
+                self.running = False
+            return
         if index < 0 or index >= len(cameras):
             with self._cond:
                 self.error = "没有这路摄像头。插上机芯后点刷新。"
@@ -1371,43 +1457,93 @@ class Engine:
         dshow_target = cam.get("dshow") or name
         with self._lock:
             self.source_label = name
-        if stop.is_set() or self._run_ffmpeg(dshow_target, stop):
-            return
-        if stop.is_set():
-            return
-        self._run_opencv(index, name, stop)
 
-    def _run_ffmpeg(self, dshow_target: str, stop: threading.Event) -> bool:
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-fflags",
-            "nobuffer",
-            "-f",
-            "dshow",
-            "-vcodec",
-            "mjpeg",
-            "-rtbufsize",
-            "8M",
-            "-i",
-            f"video={dshow_target}",
-            "-an",
-            "-c:v",
-            "copy",
-            "-f",
-            "mjpeg",
-            "pipe:1",
-        ]
+        # 1) FFmpeg DirectShow 原生 MJPEG 直通（同时兼容海康 0x70827773 全屏测温嵌入流）
+        if stop.is_set() or self._run_ffmpeg(dshow_target, stop, mode="mjpeg", errors=errors):
+            return
+        # 2) FFmpeg DirectShow 自动协商像素格式（YUYV/NV12/RGB24 等）并实时转 MJPEG
+        if stop.is_set() or self._run_ffmpeg(dshow_target, stop, mode="auto", errors=errors):
+            return
+        # 3) OpenCV 多后端（DSHOW/MSMF × MJPG/默认，支持 16bit 候选帧检测）
+        if stop.is_set() or self._run_opencv(index, name, stop, errors):
+            return
+        # 4) 可选 WinRT MediaCapture（若已安装 winrt-*）
+        if stop.is_set() or self._run_winrt(name, stop, errors):
+            return
+
+        detail = "；".join(errors[-4:]) if errors else "未收到任何图像帧"
+        with self._cond:
+            self.error = f"打不开 {name}（{detail}）。请确认关闭其他占用相机的程序或改选“Windows 相机窗口”兜底。"
+            self.running = False
+
+    def _run_ffmpeg(
+        self,
+        dshow_target: str,
+        stop: threading.Event,
+        mode: str = "mjpeg",
+        errors: Optional[list[str]] = None,
+    ) -> bool:
+        if mode == "mjpeg":
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "nobuffer",
+                "-f",
+                "dshow",
+                "-vcodec",
+                "mjpeg",
+                "-rtbufsize",
+                "8M",
+                "-i",
+                f"video={dshow_target}",
+                "-an",
+                "-c:v",
+                "copy",
+                "-f",
+                "mjpeg",
+                "pipe:1",
+            ]
+            backend_tag = "FFmpeg DSHOW (MJPEG)"
+        else:
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "nobuffer",
+                "-f",
+                "dshow",
+                "-rtbufsize",
+                "8M",
+                "-i",
+                f"video={dshow_target}",
+                "-an",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "-q:v",
+                "4",
+                "pipe:1",
+            ]
+            backend_tag = "FFmpeg DSHOW (自动解码)"
+
         try:
-            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError:
+            if errors is not None:
+                errors.append(f"{backend_tag}: 未找到 ffmpeg")
             return False
         assert proc.stdout is not None
+        assert proc.stderr is not None
         chunks: deque[Optional[bytes]] = deque(maxlen=128)
         chunks_lock = threading.Lock()
         chunks_ready = threading.Condition(chunks_lock)
+        err_lines: list[str] = []
 
         def _read() -> None:
             fd = proc.stdout.fileno()
@@ -1424,11 +1560,22 @@ class Engine:
                     chunks.append(None)
                     chunks_ready.notify()
 
+        def _read_err() -> None:
+            try:
+                raw = proc.stderr.read(4096)
+                if raw:
+                    text = decode_console_bytes(raw).strip()
+                    if text:
+                        err_lines.append(text.splitlines()[-1][:140])
+            except OSError:
+                pass
+
         threading.Thread(target=_read, daemon=True).start()
+        threading.Thread(target=_read_err, daemon=True).start()
         buf = bytearray()
         got_any = False
-        deadline = time.monotonic() + 5.0
-        note_preview = "机芯当前输出为伪彩预览（无全屏温度矩阵）。请用上位机/XU 开启全屏测温码流后再做 ΔT 判定。"
+        deadline = time.monotonic() + (4.5 if mode == "mjpeg" else 4.0)
+        note_preview = "机芯当前输出为伪彩预览（无全屏温度矩阵）。可实时框选与 OSD 反演；需真实 ΔT 归档请切全屏测温码流或 SDK。"
         note_temp = "正在用全屏温度矩阵做差。色标固定在 28–40 °C，白十字是矩阵最高温。"
         try:
             while not stop.is_set():
@@ -1450,7 +1597,10 @@ class Engine:
                     if packet is None:
                         break
                     kind, payload = packet
-                    got_any = True
+                    if not got_any:
+                        got_any = True
+                        with self._lock:
+                            self.capture_backend = backend_tag
                     if kind == "temp":
                         latest_temps = payload
                     else:
@@ -1461,6 +1611,9 @@ class Engine:
                     image = cv2.imdecode(np.frombuffer(latest_jpeg, np.uint8), cv2.IMREAD_COLOR)
                     if image is not None:
                         self._publish(image, None, note_preview)
+            if not got_any and errors is not None:
+                reason = err_lines[0] if err_lines else "无帧返回"
+                errors.append(f"{backend_tag}: {reason}")
             return got_any
         finally:
             proc.terminate()
@@ -1472,25 +1625,180 @@ class Engine:
                 if got_any:
                     self.running = False
 
-    def _run_opencv(self, index: int, name: str, stop: threading.Event) -> None:
-        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not cap.isOpened():
+    def _decode_raw_u16_frame(self, frame: np.ndarray) -> Optional[np.ndarray]:
+        """若 OpenCV 直接吐出 uint16 温度帧，按标定系数或常见开尔文尺度转换。"""
+        if frame.dtype != np.uint16 or float(np.max(frame)) <= 255.0:
+            return None
+        raw = frame if frame.ndim == 2 else frame[:, :, 0]
+        with self._lock:
+            scale = self.raw_scale
+            offset = self.raw_offset
+        cand = raw.astype(np.float32) * scale + offset
+        med = float(np.nanmedian(cand))
+        if 10.0 <= med <= 60.0:
+            return cand
+        for div in (64.0, 100.0, 10.0):
+            k = raw.astype(np.float32) / div - 273.15
+            if 10.0 <= float(np.nanmedian(k)) <= 60.0:
+                return k
+        return None
+
+    def _run_opencv(
+        self,
+        index: int,
+        name: str,
+        stop: threading.Event,
+        errors: Optional[list[str]] = None,
+    ) -> bool:
+        attempts = (
+            [
+                ("OpenCV DSHOW (MJPG)", cv2.CAP_DSHOW, "MJPG"),
+                ("OpenCV DSHOW", cv2.CAP_DSHOW, None),
+                ("OpenCV MSMF (MJPG)", cv2.CAP_MSMF, "MJPG"),
+                ("OpenCV MSMF", cv2.CAP_MSMF, None),
+            ]
+            if platform.system() == "Windows"
+            else [("OpenCV V4L2", cv2.CAP_V4L2, None)]
+        )
+        for label, backend, fourcc in attempts:
+            if stop.is_set():
+                return True
+            cap = cv2.VideoCapture(index, backend)
+            if not cap.isOpened():
+                if errors is not None:
+                    errors.append(f"{label}: 未打开")
+                continue
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if fourcc:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+
+            first = None
+            for _ in range(10):
+                if stop.is_set():
+                    cap.release()
+                    return True
+                ok, frame = cap.read()
+                if ok and frame is not None and frame.size > 0:
+                    first = frame
+                    break
+                if stop.wait(0.05):
+                    cap.release()
+                    return True
+            if first is None:
+                cap.release()
+                if errors is not None:
+                    errors.append(f"{label}: 打开成功但无帧")
+                continue
+
+            with self._lock:
+                self.capture_backend = label
+            note_color = "实时预览为 8bit 伪彩/彩色画面（无温度矩阵），可用于定位与 OSD 半定量参考。"
+            note_u16 = "检测到 16bit 原始温度帧，正在用温度矩阵做差。"
+            try:
+                cur = first
+                while not stop.is_set():
+                    temps = self._decode_raw_u16_frame(cur)
+                    if temps is not None:
+                        self._publish(None, temps, note_u16)
+                    else:
+                        if cur.ndim == 2:
+                            cur = cv2.cvtColor(cur, cv2.COLOR_GRAY2BGR)
+                        self._publish(cur, None, note_color)
+                    ok, nxt = cap.read()
+                    if not ok or nxt is None:
+                        if stop.wait(0.04):
+                            break
+                        continue
+                    cur = nxt
+            finally:
+                cap.release()
+                with self._cond:
+                    self.running = False
+            return True
+        return False
+
+    def _run_winrt(
+        self,
+        name: str,
+        stop: threading.Event,
+        errors: Optional[list[str]] = None,
+    ) -> bool:
+        if platform.system() != "Windows":
+            return False
+        try:
+            from app.winrt_capture import WinRTFrameStream
+
+            stream = WinRTFrameStream(name, start_timeout=8.0).start()
+        except ImportError:
+            return False
+        except Exception as exc:
+            if errors is not None:
+                errors.append(f"WinRT: {exc}")
+            return False
+
+        deadline = time.monotonic() + 3.5
+        first = None
+        try:
+            while not stop.is_set() and time.monotonic() < deadline:
+                item = stream.latest()
+                if item is not None:
+                    first = item[0]
+                    break
+                if stop.wait(0.05):
+                    return True
+            if first is None:
+                if errors is not None:
+                    errors.append(f"WinRT ({stream.active_mode}): 无帧返回")
+                return False
+            with self._lock:
+                self.capture_backend = f"WinRT ({stream.active_mode})"
+            note = "正在通过 WinRT 相机通道取帧（伪彩预览，无温度矩阵）。"
+            last_ts = 0.0
+            while not stop.is_set():
+                item = stream.latest()
+                if item is not None and item[1] != last_ts:
+                    last_ts = item[1]
+                    self._publish(item[0], None, note)
+                if stop.wait(0.03):
+                    break
+            return True
+        finally:
+            stream.stop()
             with self._cond:
-                self.error = f"打不开 {name}"
+                if first is not None:
+                    self.running = False
+
+    def _run_window(self, keyword: str, stop: threading.Event) -> None:
+        from app.window_capture import grab_window_bgr, list_camera_windows
+
+        wins = list_camera_windows(keyword)
+        if not wins:
+            with self._cond:
+                self.error = f"未找到已打开的“{keyword or 'Windows 相机'}”窗口。请先打开系统相机并保持未最小化。"
                 self.running = False
             return
-        note = "实时预览里没有温度矩阵。这路画面只能看，不能出温差判定。"
+        target = wins[0]
+        hwnd = target["hwnd"]
+        with self._lock:
+            self.source_label = f"窗口抓帧 · {target['title']}"
+            self.capture_backend = "Win32 窗口抓帧"
+        note = "当前为 Windows 相机窗口抓帧兜底模式（伪彩预览，无原始温度矩阵）。请保持相机窗口未最小化。"
+        missed = 0
         try:
             while not stop.is_set():
-                ok, frame = cap.read()
-                if not ok:
-                    if stop.wait(0.05):
+                frame = grab_window_bgr(hwnd, crop=True)
+                if frame is not None:
+                    missed = 0
+                    self._publish(frame, None, note)
+                else:
+                    missed += 1
+                    if missed >= 25:
+                        with self._cond:
+                            self.error = "相机窗口已关闭或被最小化，请恢复窗口后重新开始。"
                         break
-                    continue
-                self._publish(frame, None, note)
+                if stop.wait(0.08):
+                    break
         finally:
-            cap.release()
             with self._cond:
                 self.running = False
 

@@ -199,11 +199,14 @@
       </div>
 
       <nav class="side-tabs" role="tablist" aria-label="右侧详情页签">
-        <button type="button" class="tab-btn is-on" data-tab="live">实时与热扩散</button>
+        <button type="button" class="tab-btn is-on" data-tab="live">实时参数</button>
         <button type="button" class="tab-btn" data-tab="trend">
-          趋势与复盘 <span id="tab-count" class="tab-badge">0</span>
+          趋势复盘 <span id="tab-count" class="tab-badge">0</span>
         </button>
-        <button type="button" class="tab-btn" data-tab="lab">验收统计台</button>
+        <button type="button" class="tab-btn" data-tab="lab">验收台</button>
+        <button type="button" class="tab-btn" data-tab="clinic">
+          临床档案 <span id="clinic-count" class="tab-badge">0</span>
+        </button>
       </nav>
 
       <div class="tab-body">
@@ -241,9 +244,13 @@
           <div class="subcard">
             <div class="subcard-head">
               <h2>运行与传感参数</h2>
-              <span id="matrix-tag" class="muted-tag">—</span>
+              <div class="head-actions">
+                <span id="matrix-tag" class="muted-tag">—</span>
+                <button id="probe-btn" type="button" class="mini-btn" title="探测接入摄像头支持的视频编码与 16bit 温度流">探测编码</button>
+              </div>
             </div>
             <dl id="lines"></dl>
+            <pre id="probe-output" class="probe-output" hidden></pre>
           </div>
         </section>
 
@@ -302,6 +309,71 @@
               <button id="copy-md" type="button" class="tool-btn">复制 Markdown 验收表</button>
               <button id="export-csv" type="button" class="tool-btn">下载 CSV 记录</button>
             </div>
+          </div>
+        </section>
+
+        <section id="tab-clinic" class="tab-panel">
+          <div class="subcard">
+            <div class="subcard-head">
+              <h2>临床草稿（含质控门禁）</h2>
+              <button id="refresh-clinic" type="button" class="mini-btn">刷新</button>
+            </div>
+            <div class="clinic-create-row">
+              <input id="draft-title" type="text" maxlength="60" placeholder="草稿标题，例如：右手背创口初筛" aria-label="草稿标题">
+              <button id="save-draft" type="button" class="btn-primary">存为草稿</button>
+            </div>
+            <p class="clinic-disclaimer">仅通过真实温度矩阵与质量门禁的草稿可归档为患者档案；本系统仅作辅助筛查，不替代临床诊断。</p>
+            <div id="clinic-drafts" class="clinic-list"></div>
+          </div>
+
+          <div id="draft-editor" class="subcard" hidden>
+            <div class="subcard-head">
+              <h2 id="draft-editor-title">草稿详情</h2>
+              <span id="draft-gate-pill" class="gate-pill">—</span>
+            </div>
+            <p id="draft-gate-note" class="clinic-note" hidden></p>
+            <div class="lab-form">
+              <label class="lab-field">
+                <span>创口部位</span>
+                <input id="draft-site" type="text" maxlength="120" placeholder="例如：右手背第三掌骨远端">
+              </label>
+              <label class="lab-field">
+                <span>病程 / 持续时间</span>
+                <input id="draft-duration" type="text" maxlength="120" placeholder="例如：外伤后第 4 天">
+              </label>
+              <label class="lab-field">
+                <span>创面表现</span>
+                <input id="draft-symptoms" type="text" maxlength="120" placeholder="例如：边缘轻度红肿、少量淡黄渗液">
+              </label>
+              <label class="lab-field">
+                <span>处理与换药史</span>
+                <input id="draft-treatment" type="text" maxlength="120" placeholder="例如：碘伏消毒后无菌敷料覆盖">
+              </label>
+              <label class="lab-field">
+                <span>其他备注（勿填姓名/身份证号）</span>
+                <input id="draft-notes" type="text" maxlength="120" placeholder="可选备注">
+              </label>
+              <div class="export-row">
+                <button id="draft-save-details" type="button" class="tool-btn">保存临床详情</button>
+                <button id="draft-archive" type="button" class="btn-accent">归档为患者档案</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="subcard">
+            <div class="subcard-head">
+              <h2>患者档案与 HTML 报告</h2>
+              <span id="clinic-patient-count" class="muted-tag">0 位</span>
+            </div>
+            <div id="clinic-patients" class="clinic-list"></div>
+            <div id="clinic-reports" class="clinic-list" style="margin-top:8px"></div>
+          </div>
+
+          <div class="subcard">
+            <div class="subcard-head">
+              <h2>循证医学依据（E001–E004）</h2>
+            </div>
+            <div id="clinic-evidence" class="clinic-list"></div>
           </div>
         </section>
       </div>

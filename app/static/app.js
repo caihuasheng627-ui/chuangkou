@@ -36,8 +36,10 @@ const tabPanels = {
   live: document.querySelector("#tab-live"),
   trend: document.querySelector("#tab-trend"),
   lab: document.querySelector("#tab-lab"),
+  clinic: document.querySelector("#tab-clinic"),
 };
 const tabCountEl = document.querySelector("#tab-count");
+const clinicCountEl = document.querySelector("#clinic-count");
 
 const frame = document.querySelector("#frame");
 const canvas = document.querySelector("#overlay");
@@ -97,6 +99,8 @@ const physHaloEl = document.querySelector("#phys-halo");
 const physElongEl = document.querySelector("#phys-elong");
 const radialBarsEl = document.querySelector("#radial-bars");
 const matrixTagEl = document.querySelector("#matrix-tag");
+const probeBtn = document.querySelector("#probe-btn");
+const probeOutputEl = document.querySelector("#probe-output");
 const linesEl = document.querySelector("#lines");
 
 const trendSummaryEl = document.querySelector("#trend-summary");
@@ -104,6 +108,28 @@ const trendChartEl = document.querySelector("#trend-chart");
 const historyCountEl = document.querySelector("#history-count");
 const historyListEl = document.querySelector("#history-list");
 const groupStatsEl = document.querySelector("#group-stats");
+
+const draftTitleEl = document.querySelector("#draft-title");
+const saveDraftBtn = document.querySelector("#save-draft");
+const clinicDraftsEl = document.querySelector("#clinic-drafts");
+const draftEditorEl = document.querySelector("#draft-editor");
+const draftEditorTitleEl = document.querySelector("#draft-editor-title");
+const draftGatePillEl = document.querySelector("#draft-gate-pill");
+const draftGateNoteEl = document.querySelector("#draft-gate-note");
+const draftSiteEl = document.querySelector("#draft-site");
+const draftDurationEl = document.querySelector("#draft-duration");
+const draftSymptomsEl = document.querySelector("#draft-symptoms");
+const draftTreatmentEl = document.querySelector("#draft-treatment");
+const draftNotesEl = document.querySelector("#draft-notes");
+const draftSaveDetailsBtn = document.querySelector("#draft-save-details");
+const draftArchiveBtn = document.querySelector("#draft-archive");
+const clinicPatientCountEl = document.querySelector("#clinic-patient-count");
+const clinicPatientsEl = document.querySelector("#clinic-patients");
+const clinicReportsEl = document.querySelector("#clinic-reports");
+const clinicEvidenceEl = document.querySelector("#clinic-evidence");
+
+let activeDraftId = "";
+let clinicData = null;
 
 function showToast(text, isError = false) {
   if (!toastEl) return;
@@ -155,6 +181,8 @@ function setActiveTab(name) {
   }
   if (name === "trend" || name === "lab") {
     loadRecords();
+  } else if (name === "clinic") {
+    loadClinic();
   }
 }
 
@@ -165,6 +193,7 @@ async function loadDevices(notify = false) {
     const devices = data.devices || [];
     const presets = [
       ...devices.map((item) => ({ value: item.id, label: item.label })),
+      { value: "window:camera", label: "抓拍 Windows 相机窗口（兜底）" },
       { value: "file", label: "回放测试视频（伪彩 + OSD 双锚点反演）" },
       { value: "synthetic", label: "自检合成温度（+3.3 °C · 档 2）" },
       { value: "synthetic:mild", label: "自检模拟偏热（+1.4 °C · 档 1）" },
@@ -186,7 +215,7 @@ async function loadDevices(notify = false) {
     }
     const active = names.find((item) => item.value === state.source);
     const keep = names.find((item) => item.value === previous);
-    const thermal = names.find((item) => item.textContent.includes("UVC"));
+    const thermal = names.find((item) => /UVC|HIK|THERMAL/i.test(item.textContent));
     if (active) sourceEl.value = active.value;
     else if (keep) sourceEl.value = previous;
     else if (thermal) sourceEl.value = thermal.value;
@@ -1012,6 +1041,7 @@ function renderState(state) {
   const distText = `${state.distance_mm || 300} mm（${state.pixel_mm ? state.pixel_mm.toFixed(2) : "—"} mm/px）`;
   const rows = hasTemperature
     ? [
+        ["采集后端 / 编码", state.capture_backend || state.source_label || "—"],
         ["工作距离 / 像元", distText],
         ["发射率 / 平均帧", `${Number(state.emissivity || 0.98).toFixed(2)} · ${state.frame_count || 0} 帧`],
         ["异常热区数", `${state.region_count || 0} 处`],
@@ -1019,6 +1049,7 @@ function renderState(state) {
         ["画面帧率", state.fps ? `${state.fps.toFixed(1)} fps` : "—"],
       ]
     : [
+        ["采集后端 / 编码", state.capture_backend || state.source_label || "—"],
         ["OSD 锚点 (Max / Cal)", state.osd ? `${state.osd.osd_max ?? "—"} °C / ${state.osd.osd_cal ?? "—"} °C` : "—"],
         ["分割方式", state.weight_label || "—"],
         ["分割置信度 / 占比", `${state.mask_confidence ? state.mask_confidence.toFixed(2) : "—"} · ${state.mask_fraction ? `${Math.round(state.mask_fraction * 100)}%` : "—"}`],
@@ -1349,7 +1380,268 @@ for (const btn of tabBtns) {
   btn.addEventListener("click", () => setActiveTab(btn.dataset.tab));
 }
 
+/* ===== 设备编码探测与临床草稿/档案工作流（整合自 dsh-wound-clinic v0.7.2） ===== */
+async function runProbe() {
+  if (!probeBtn || !probeOutputEl) return;
+  probeBtn.disabled = true;
+  probeOutputEl.hidden = false;
+  probeOutputEl.textContent = "正在探测接入摄像头格式、视频编码与 16bit 温度流...";
+  try {
+    const res = await fetch("/api/probe").then((r) => r.json());
+    if (!res || !res.ok) {
+      probeOutputEl.textContent = "探测失败";
+      return;
+    }
+    const lines = [res.summary || "探测完成"];
+    for (const item of res.dshow_options || []) {
+      lines.push(`\n[DirectShow] ${item.label}`);
+      if (item.options && item.options.length) {
+        for (const opt of item.options.slice(0, 8)) lines.push(`  ${opt}`);
+      } else {
+        lines.push("  （未列出扩展格式）");
+      }
+    }
+    for (const p of res.opencv_probes || []) {
+      if (!p.opened && p.mode_requested !== "default") continue;
+      if (p.read_frames > 0) {
+        lines.push(
+          `[OpenCV cam:${p.camera} ${p.backend}/${p.mode_requested}] ${p.width_actual}×${p.height_actual} fourcc=${p.fourcc_actual} dtype=${p.dtype} range=[${p.raw_min}, ${p.raw_max}]`
+        );
+      } else if (p.opened) {
+        lines.push(`[OpenCV cam:${p.camera} ${p.backend}/${p.mode_requested}] 打开但无帧`);
+      }
+    }
+    probeOutputEl.textContent = lines.join("\n");
+  } catch (_err) {
+    probeOutputEl.textContent = "探测请求失败，请检查本机服务。";
+  } finally {
+    probeBtn.disabled = false;
+  }
+}
+
+function renderDraftEditor(draft) {
+  if (!draft) {
+    draftEditorEl.hidden = true;
+    return;
+  }
+  draftEditorEl.hidden = false;
+  const archived = draft.status === "archived";
+  const passed = draft.quality_gate === "passed";
+  draftEditorTitleEl.textContent = draft.title || "草稿详情";
+  draftGatePillEl.classList.remove("is-pass", "is-block", "is-arch");
+  if (archived) {
+    draftGatePillEl.classList.add("is-arch");
+    draftGatePillEl.textContent = `已归档 · ${draft.patient_name || draft.patient_ref || ""}`;
+  } else if (passed) {
+    draftGatePillEl.classList.add("is-pass");
+    draftGatePillEl.textContent = draft.rule_result?.label || "质控通过";
+  } else {
+    draftGatePillEl.classList.add("is-block");
+    draftGatePillEl.textContent = "门禁未通过";
+  }
+
+  if (!passed && draft.blocked_message) {
+    draftGateNoteEl.hidden = false;
+    draftGateNoteEl.textContent = `质控阻断：${draft.blocked_message}`;
+  } else {
+    draftGateNoteEl.hidden = true;
+  }
+
+  const d = draft.details || {};
+  draftSiteEl.value = d.site || "";
+  draftDurationEl.value = d.duration || "";
+  draftSymptomsEl.value = d.symptoms || "";
+  draftTreatmentEl.value = d.treatment || "";
+  draftNotesEl.value = d.notes || "";
+  for (const el of [draftSiteEl, draftDurationEl, draftSymptomsEl, draftTreatmentEl, draftNotesEl]) {
+    el.disabled = archived;
+  }
+  draftSaveDetailsBtn.disabled = archived;
+  draftArchiveBtn.disabled = archived || !passed;
+}
+
+async function loadClinic(notify = false) {
+  try {
+    const data = await fetch("/api/clinic/summary").then((r) => r.json());
+    if (!data || !data.ok) return;
+    clinicData = data;
+    const drafts = data.drafts || [];
+    const patients = data.patients || [];
+    const reports = data.reports || [];
+    const evidence = data.evidence || [];
+
+    clinicCountEl.textContent = String(drafts.length);
+    clinicPatientCountEl.textContent = `${patients.length} 位`;
+
+    clinicDraftsEl.replaceChildren();
+    if (drafts.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty-note";
+      empty.textContent = "暂无临床草稿。启动热像或合成温度源后点击“存为草稿”。";
+      clinicDraftsEl.appendChild(empty);
+      activeDraftId = "";
+      renderDraftEditor(null);
+    } else {
+      for (const item of drafts) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `clinic-item ${item.draft_id === activeDraftId ? "is-active" : ""}`;
+        const meta = document.createElement("div");
+        meta.className = "clinic-item-meta";
+        const title = document.createElement("span");
+        title.textContent = item.title;
+        const sub = document.createElement("small");
+        const dtStr =
+          item.delta_t_c !== null && item.delta_t_c !== undefined
+            ? `ΔT ${item.delta_t_c >= 0 ? "+" : ""}${Number(item.delta_t_c).toFixed(2)}°C`
+            : item.estimated_delta_t_c !== null && item.estimated_delta_t_c !== undefined
+            ? `伪彩反演 ≈${Number(item.estimated_delta_t_c).toFixed(2)}°C`
+            : "无温度矩阵";
+        sub.textContent = `${dtStr} · 详情 ${item.detail_count || 0} 项 · ${(item.updated_at || "").slice(5, 16).replace("T", " ")}`;
+        meta.append(title, sub);
+
+        const pill = document.createElement("span");
+        pill.className = "gate-pill";
+        if (item.status === "archived") {
+          pill.classList.add("is-arch");
+          pill.textContent = item.patient_name || "已归档";
+        } else if (item.quality_gate === "passed") {
+          pill.classList.add("is-pass");
+          pill.textContent = item.rule_result?.level || "通过";
+        } else {
+          pill.classList.add("is-block");
+          pill.textContent = "阻断";
+        }
+        btn.append(meta, pill);
+        btn.addEventListener("click", () => {
+          activeDraftId = item.draft_id;
+          renderDraftEditor(item);
+          loadClinic(false);
+        });
+        clinicDraftsEl.appendChild(btn);
+      }
+      const selected = drafts.find((d) => d.draft_id === activeDraftId) || drafts[0];
+      activeDraftId = selected.draft_id;
+      renderDraftEditor(selected);
+    }
+
+    clinicPatientsEl.replaceChildren();
+    if (patients.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty-note";
+      empty.textContent = "暂无已归档患者档案";
+      clinicPatientsEl.appendChild(empty);
+    } else {
+      for (const p of patients) {
+        const row = document.createElement("div");
+        row.className = "clinic-item";
+        const meta = document.createElement("div");
+        meta.className = "clinic-item-meta";
+        const t = document.createElement("span");
+        t.textContent = `${p.display_name || p.patient_ref} (${p.patient_ref})`;
+        const s = document.createElement("small");
+        s.textContent = `建档 ${(p.created_at || "").slice(0, 16).replace("T", " ")}`;
+        meta.append(t, s);
+        const tag = document.createElement("span");
+        tag.className = "gate-pill is-arch";
+        tag.textContent = `${p.measurement_count || 0} 次测量`;
+        row.append(meta, tag);
+        clinicPatientsEl.appendChild(row);
+      }
+    }
+
+    clinicReportsEl.replaceChildren();
+    for (const r of reports.slice(0, 10)) {
+      const link = document.createElement("a");
+      link.className = "clinic-item";
+      link.href = `/api/clinic/report/${encodeURIComponent(r.report_id)}`;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      const meta = document.createElement("div");
+      meta.className = "clinic-item-meta";
+      const t = document.createElement("span");
+      t.textContent = `HTML 报告 · ${r.report_id}`;
+      const s = document.createElement("small");
+      s.textContent = `${r.patient_ref} · ${(r.created_at || "").slice(0, 16).replace("T", " ")}`;
+      meta.append(t, s);
+      const tag = document.createElement("span");
+      tag.className = "gate-pill is-pass";
+      tag.textContent = "打开报告";
+      link.append(meta, tag);
+      clinicReportsEl.appendChild(link);
+    }
+
+    clinicEvidenceEl.replaceChildren();
+    for (const ev of evidence) {
+      const box = document.createElement("div");
+      box.className = "evidence-item";
+      const head = document.createElement("div");
+      const idEl = document.createElement("strong");
+      idEl.textContent = ev.evidence_id;
+      head.append(idEl, document.createTextNode(`${ev.title} (${ev.year})`));
+      const p = document.createElement("p");
+      p.textContent = ev.verified_excerpt || "";
+      box.append(head, p);
+      clinicEvidenceEl.appendChild(box);
+    }
+
+    if (notify) showToast("已刷新临床草稿与档案");
+  } catch (_err) {
+    if (notify) showToast("刷新临床档案失败", true);
+  }
+}
+
+async function createClinicDraft() {
+  const title = (draftTitleEl.value || "").trim();
+  const res = await post("/api/clinic/draft/create", { title });
+  if (res && res.ok && res.draft) {
+    draftTitleEl.value = "";
+    activeDraftId = res.draft.draft_id;
+    const passed = res.draft.quality_gate === "passed";
+    showToast(passed ? "已保存草稿（质量门禁通过）" : "已保存草稿（无真实温度矩阵，门禁阻断归档）");
+    await loadClinic(false);
+  } else {
+    showToast(res?.error?.message || res?.error || "保存草稿失败", true);
+  }
+}
+
+async function saveDraftDetails() {
+  if (!activeDraftId) return;
+  const res = await post("/api/clinic/draft/update", {
+    draft_id: activeDraftId,
+    details: {
+      site: draftSiteEl.value,
+      duration: draftDurationEl.value,
+      symptoms: draftSymptomsEl.value,
+      treatment: draftTreatmentEl.value,
+      notes: draftNotesEl.value,
+    },
+  });
+  if (res && res.ok) {
+    showToast("已更新草稿临床详情");
+    await loadClinic(false);
+  } else {
+    showToast(res?.error?.message || "更新草稿详情失败", true);
+  }
+}
+
+async function archiveActiveDraft() {
+  if (!activeDraftId) return;
+  const res = await post("/api/clinic/draft/archive", { draft_id: activeDraftId });
+  if (res && res.ok) {
+    showToast(`已归档为 ${res.display_name} (${res.patient_ref}) 并生成 HTML 报告`);
+    await loadClinic(false);
+  } else {
+    showToast(res?.error?.message || "归档失败", true);
+  }
+}
+
 document.querySelector("#refresh-records").addEventListener("click", () => loadRecords(true));
+document.querySelector("#refresh-clinic").addEventListener("click", () => loadClinic(true));
+probeBtn.addEventListener("click", runProbe);
+saveDraftBtn.addEventListener("click", createClinicDraft);
+draftSaveDetailsBtn.addEventListener("click", saveDraftDetails);
+draftArchiveBtn.addEventListener("click", archiveActiveDraft);
 document.querySelector("#copy-md").addEventListener("click", copyMarkdownTable);
 document.querySelector("#export-csv").addEventListener("click", () => {
   const link = document.createElement("a");
@@ -1383,5 +1675,6 @@ setMode("wound");
 syncDistPresets(300);
 loadDevices(false);
 loadRecords(false);
+loadClinic(false);
 tick();
 setInterval(paint, 400);

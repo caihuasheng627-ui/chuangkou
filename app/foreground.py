@@ -67,11 +67,19 @@ def _session(model_id: str):
             options.intra_op_num_threads = 2
             options.inter_op_num_threads = 1
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            _SESSIONS[model_id] = ort.InferenceSession(
-                str(path),
-                sess_options=options,
-                providers=["CPUExecutionProvider"],
-            )
+            try:
+                _SESSIONS[model_id] = ort.InferenceSession(
+                    str(path),
+                    sess_options=options,
+                    providers=["CPUExecutionProvider"],
+                )
+            except Exception:
+                # Windows 非 ASCII 路径（如中文用户名目录）下退回内存字节加载
+                _SESSIONS[model_id] = ort.InferenceSession(
+                    path.read_bytes(),
+                    sess_options=options,
+                    providers=["CPUExecutionProvider"],
+                )
         except Exception:
             _FAILED.add(model_id)
             return None

@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import app.clinic as clinic_mod
 import app.engine as eng_mod
 from app.engine import Engine, list_cameras
 from app.foreground import available_models
+from app.probe_camera import probe_devices, probe_ffmpeg_dshow_options
+
+
+def _configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -56,12 +67,30 @@ class Handler(BaseHTTPRequestHandler):
             self._bytes(FAVICON_SVG, "image/svg+xml", cache="public, max-age=3600")
         elif path == "/api/devices":
             self._json({"devices": list_cameras(), "models": available_models()})
+        elif path == "/api/probe":
+            self._probe()
         elif path == "/api/state":
             self._json(ENGINE.state())
         elif path == "/api/records":
             self._json(ENGINE.list_records())
         elif path == "/api/records.csv":
             self._csv_export()
+        elif path == "/api/clinic/summary":
+            self._json(clinic_mod.clinic_summary())
+        elif path == "/api/clinic/draft":
+            qs = parse_qs(parsed.query)
+            draft_id = qs.get("draft_id", [""])[0]
+            self._json(clinic_mod.draft_get(draft_id))
+        elif path == "/api/clinic/evidence":
+            qs = parse_qs(parsed.query)
+            self._json(clinic_mod.evidence_search(qs.get("q", [""])[0], qs.get("scenario", [""])[0]))
+        elif path.startswith("/api/clinic/report/"):
+            report_id = path.split("/api/clinic/report/", 1)[1].strip("/")
+            content = clinic_mod.read_report_html(report_id)
+            if content is None:
+                self.send_error(404)
+            else:
+                self._bytes(content, "text/html; charset=utf-8", cache="no-store")
         elif path == "/api/point":
             qs = parse_qs(parsed.query)
             try:
@@ -152,6 +181,27 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif path == "/api/align_pose":
             self._json(ENGINE.align_rois_to_pose())
+        elif path == "/api/raw_calib":
+            try:
+                ENGINE.set_raw_calibration(float(body.get("scale", 0.01)), float(body.get("offset", 0.0)))
+            except (TypeError, ValueError):
+                self._json({"ok": False, "error": "标定参数无效"}, 400)
+                return
+            self._json({"ok": True, "state": ENGINE.state()})
+        elif path == "/api/clinic/draft/create":
+            measurement = body.get("measurement")
+            if measurement is None:
+                try:
+                    measurement = clinic_mod.measurement_from_engine(ENGINE)
+                except RuntimeError as exc:
+                    self._json({"ok": False, "error": {"code": "no_frame", "message": str(exc)}}, 409)
+                    return
+            res = clinic_mod.draft_create(str(body.get("title") or ""), measurement, body.get("details"))
+            self._json(res)
+        elif path == "/api/clinic/draft/update":
+            self._json(clinic_mod.draft_update(body))
+        elif path == "/api/clinic/draft/archive":
+            self._json(clinic_mod.draft_archive(str(body.get("draft_id") or "")))
         else:
             self.send_error(404)
 
@@ -181,6 +231,34 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
+
+    def _probe(self) -> None:
+        st = ENGINE.state()
+        if st.get("running") and str(st.get("source") or "").startswith("cam:"):
+            # 摄像头正在采集中时不抢占句柄，仅查询 DirectShow 格式列表并返回当前后端状态
+            devices = list_cameras()
+            dshow_options = [
+                {
+                    "id": dev["id"],
+                    "label": dev["label"],
+                    "options": probe_ffmpeg_dshow_options(dev.get("dshow") or dev["label"]),
+                }
+                for dev in devices
+                if dev.get("backend") == "dshow"
+            ]
+            self._json(
+                {
+                    "ok": True,
+                    "busy": True,
+                    "devices": devices,
+                    "dshow_options": dshow_options,
+                    "opencv_probes": [],
+                    "has_16bit_candidate": bool(st.get("has_temperature")),
+                    "summary": f"当前正在采集（{st.get('capture_backend') or st.get('source_label')}），已返回 DirectShow 编码列表；如需 OpenCV 16bit 位深探测请先点“停止”。",
+                }
+            )
+            return
+        self._json(probe_devices(frames=4))
 
     def _csv_export(self) -> None:
         v2 = eng_mod.RECORD_PATH.with_name("records_v2.csv")
@@ -235,8 +313,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    _configure_stdio()
     devices = list_cameras()
-    thermal = next((item["id"] for item in devices if "UVC" in item["label"].upper()), None)
+    thermal = next(
+        (item["id"] for item in devices if any(k in item["label"].upper() for k in ("UVC", "HIK", "THERMAL"))),
+        None,
+    )
     if thermal:
         ENGINE.start(thermal)
     port = int(os.environ.get("CHUANGKOU_PORT", "8765"))
